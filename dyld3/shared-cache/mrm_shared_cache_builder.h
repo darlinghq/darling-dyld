@@ -42,7 +42,7 @@ enum Platform {
     tvOS                = 3,    // PLATFORM_TVOS
     watchOS             = 4,    // PLATFORM_WATCHOS
     bridgeOS            = 5,    // PLATFORM_BRIDGEOS
-    iOSMac              = 6,    // PLATFORM_IOSMAC
+    iOSMac              = 6,    // PLATFORM_MACCATALYST
     iOS_simulator       = 7,    // PLATFORM_IOSIMULATOR
     tvOS_simulator      = 8,    // PLATFORM_TVOSSIMULATOR
     watchOS_simulator   = 9     // PLATFORM_WATCHOSSIMULATOR
@@ -66,7 +66,8 @@ enum FileFlags
 
     // These are for the order files
     DylibOrderFile                              = 100,
-    DirtyDataOrderFile                          = 101
+    DirtyDataOrderFile                          = 101,
+    ObjCOptimizationsFile                       = 102,
 };
 
 struct BuildOptions_v1
@@ -80,6 +81,22 @@ struct BuildOptions_v1
     uint64_t                                    numArchs;
     bool                                        verboseDiagnostics;
     bool                                        isLocallyBuiltCache;
+};
+
+// This is available when getVersion() returns 1.2 or higher
+struct BuildOptions_v2
+{
+    uint64_t                                    version;                        // Future proofing, set to 2
+    const char *                                updateName;                     // BuildTrain+UpdateNumber
+    const char *                                deviceName;
+    enum Disposition                            disposition;                    // Internal, Customer, etc.
+    enum Platform                               platform;                       // Enum: unknown, macOS, iOS, ...
+    const char **                               archs;
+    uint64_t                                    numArchs;
+    bool                                        verboseDiagnostics;
+    bool                                        isLocallyBuiltCache;
+    // Added in v2
+    bool                                        optimizeForSize;
 };
 
 enum FileBehavior
@@ -115,38 +132,38 @@ struct CacheResult
     const char*                                 mapJSON;
 };
 
-struct SharedCacheBuilder;
+struct MRMSharedCacheBuilder;
 
 __API_AVAILABLE(macos(10.12))
 void getVersion(uint32_t *major, uint32_t *minor);
 
 __API_AVAILABLE(macos(10.12))
-struct SharedCacheBuilder* createSharedCacheBuilder(const struct BuildOptions_v1* options);
+struct MRMSharedCacheBuilder* createSharedCacheBuilder(const struct BuildOptions_v1* options);
 
 // Add a file.  Returns true on success.
 __API_AVAILABLE(macos(10.12))
-bool addFile(struct SharedCacheBuilder* builder, const char* path, uint8_t* data, uint64_t size, enum FileFlags fileFlags);
+bool addFile(struct MRMSharedCacheBuilder* builder, const char* path, uint8_t* data, uint64_t size, enum FileFlags fileFlags);
 
 __API_AVAILABLE(macos(10.12))
-bool addSymlink(struct SharedCacheBuilder* builder, const char* fromPath, const char* toPath);
+bool addSymlink(struct MRMSharedCacheBuilder* builder, const char* fromPath, const char* toPath);
 
 __API_AVAILABLE(macos(10.12))
-bool runSharedCacheBuilder(struct SharedCacheBuilder* builder);
+bool runSharedCacheBuilder(struct MRMSharedCacheBuilder* builder);
 
 __API_AVAILABLE(macos(10.12))
-const char* const* getErrors(const struct SharedCacheBuilder* builder, uint64_t* errorCount);
+const char* const* getErrors(const struct MRMSharedCacheBuilder* builder, uint64_t* errorCount);
 
 __API_AVAILABLE(macos(10.12))
-const struct FileResult* const* getFileResults(struct SharedCacheBuilder* builder, uint64_t* resultCount);
+const struct FileResult* const* getFileResults(struct MRMSharedCacheBuilder* builder, uint64_t* resultCount);
 
 __API_AVAILABLE(macos(10.12))
-const struct CacheResult* const* getCacheResults(struct SharedCacheBuilder* builder, uint64_t* resultCount);
+const struct CacheResult* const* getCacheResults(struct MRMSharedCacheBuilder* builder, uint64_t* resultCount);
 
 __API_AVAILABLE(macos(10.12))
-const char* const* getFilesToRemove(const struct SharedCacheBuilder* builder, uint64_t* fileCount);
+const char* const* getFilesToRemove(const struct MRMSharedCacheBuilder* builder, uint64_t* fileCount);
 
 __API_AVAILABLE(macos(10.12))
-void destroySharedCacheBuilder(struct SharedCacheBuilder* builder);
+void destroySharedCacheBuilder(struct MRMSharedCacheBuilder* builder);
 
 #ifdef __cplusplus
 }

@@ -51,7 +51,10 @@ struct dyld_static_pool {
 	dyld_static_pool*	previousPool;
 	uint8_t*			current;
 	uint8_t*			end;
-	uint8_t				pool[1]; 
+
+    // libunwind, and probably others, need the pool to be 16-byte aligned as malloc guarantees that
+    __attribute__((__aligned__(16)))
+    uint8_t				pool[1];
 };
 
 // allocate initial pool independently of pool header to take less space on disk
@@ -68,6 +71,9 @@ void* malloc(size_t size)
 		return p;
 	}
 	else {
+        // keep allocations 16-byte aligned
+        size = ((size + 15) & -16);
+
 		if ( size > DYLD_POOL_CHUNK_SIZE ) {
 			dyld::log("dyld malloc overflow: size=%lu\n", size);
 			dyld::halt("dyld malloc overflow\n");
@@ -147,10 +153,7 @@ void* calloc(size_t count, size_t size)
 void* realloc(void *ptr, size_t size)
 {
 	void* result = malloc(size);
-#ifdef DARLING
-	if (ptr)
-#endif
-		memcpy(result, ptr, size);
+	memcpy(result, ptr, size);
 	return result;
 }
 

@@ -35,10 +35,6 @@
 #include <System/sys/kdebug.h>
 #include <System/sys/reason.h>
 
-#ifdef DARLING
-#define kdebug_trace_string(...) ((uint64_t)-1)
-#endif
-
 
 #define DBG_DYLD_INTERNAL_SUBCLASS              (7)
 #define DBG_DYLD_API_SUBCLASS                   (8)
@@ -69,7 +65,8 @@
 #define DBG_DYLD_DEBUGGING_VM_UNMAP             (KDBG_CODE(DBG_DYLD, DBG_DYLD_DEBUGGING_SUBCLASS, 1))
 #define DBG_DYLD_DEBUGGING_MAP_LOOP             (KDBG_CODE(DBG_DYLD, DBG_DYLD_DEBUGGING_SUBCLASS, 2))
 #define DBG_DYLD_DEBUGGING_MARK                 (KDBG_CODE(DBG_DYLD, DBG_DYLD_DEBUGGING_SUBCLASS, 3))
-
+#define DBG_DYLD_TASK_NOTIFY_REGISTER           (KDBG_CODE(DBG_DYLD, DBG_DYLD_DEBUGGING_SUBCLASS, 4))
+#define DBG_DYLD_TASK_NOTIFY_DEREGISTER         (KDBG_CODE(DBG_DYLD, DBG_DYLD_DEBUGGING_SUBCLASS, 5))
 
 #define VIS_HIDDEN __attribute__((visibility("hidden")))
 

@@ -48,7 +48,7 @@ const char*  __progname = NULL;
 //
 struct __DATA__dyld { 
 	long			lazy; 
-	int				(*lookup)(const char*, void**);
+	void *lookup;
 	// ProgramVars
 	const void*		mh;
 	int*			NXArgcPtr;
@@ -60,7 +60,7 @@ struct __DATA__dyld {
 static volatile struct __DATA__dyld  myDyldSection __attribute__ ((section ("__DATA,__dyld"))) 
 	= { 0, 0, NULL, &NXArgc, &NXArgv, &environ, &__progname };
 
-#if __arm__ && __MAC_OS_X_VERSION_MIN_REQUIRED
+#if __arm__ && TARGET_OS_OSX
 // <rdar://problem/8755380>
 // For historical reasons, gcc and llvm-gcc added -ldylib1.o to the link line of armv6 
 // dylibs when targeting MacOSX (but not iOS).  clang cleans up that mistake, but doing
@@ -68,10 +68,13 @@ static volatile struct __DATA__dyld  myDyldSection __attribute__ ((section ("__D
 // dylib1.o is used, it overrides this, otherwise this implementation is used.
 __attribute__((weak))
 #endif
-//__attribute__((visibility("hidden")))
+__attribute__((visibility("hidden")))
 int _dyld_func_lookup(const char* dyld_func_name, void **address)
 {
-	return (*myDyldSection.lookup)(dyld_func_name, address);
+	// Cast lookup function here to resign from dyld's 0-discriminator to a real
+	// function pointer if needed.
+	int (*lookupFn)(const char*, void**) = myDyldSection.lookup;
+	return lookupFn(dyld_func_name, address);
 }
 
 #if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
