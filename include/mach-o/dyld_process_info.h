@@ -28,7 +28,6 @@
 #include <mach/mach.h>
 #include <dispatch/dispatch.h>
 #include <uuid/uuid.h>
-#include <os/availability.h>
 
 //FIXME we should include dyld_priv.h, but we need to do this to workaround a header search path bug in tapi
 typedef uint32_t dyld_platform_t;
@@ -62,6 +61,12 @@ struct dyld_process_cache_info {
     bool        privateCache;           // process is using a private copy of its dyld cache
 };
 typedef struct dyld_process_cache_info dyld_process_cache_info;
+
+struct dyld_process_aot_cache_info {
+    uuid_t      cacheUUID;
+    uint64_t    cacheBaseAddress;
+};
+typedef struct dyld_process_aot_cache_info dyld_process_aot_cache_info;
 
 enum {
     dyld_process_state_not_started              = 0x00,     // process is suspended, dyld has not started running yet
@@ -106,8 +111,14 @@ extern void  _dyld_process_info_get_state(dyld_process_info info, dyld_process_s
 // fill in struct with info about dyld cache in use by process
 extern void  _dyld_process_info_get_cache(dyld_process_info info, dyld_process_cache_info* cacheInfo);
 
+// fill in struct with info about aot cache in use by process
+extern void  _dyld_process_info_get_aot_cache(dyld_process_info info, dyld_process_aot_cache_info* aotCacheInfo);
+
 // iterate all images in process
 extern void _dyld_process_info_for_each_image(dyld_process_info info, void (^callback)(uint64_t machHeaderAddress, const uuid_t uuid, const char* path));
+
+// iterate all aot images in process
+extern void _dyld_process_info_for_each_aot_image(dyld_process_info info, bool (^callback)(uint64_t x86Address, uint64_t aotAddress, uint64_t aotSize, uint8_t* aotImageKey, size_t aotImageKeySize))  __API_UNAVAILABLE(ios, tvos, watchos) __API_UNAVAILABLE(bridgeos);
 
 // iterate all segments in an image
 extern void _dyld_process_info_for_each_segment(dyld_process_info info, uint64_t machHeaderAddress, void (^callback)(uint64_t segmentAddress, uint64_t segmentSize, const char* segmentName));

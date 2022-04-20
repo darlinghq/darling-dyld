@@ -38,6 +38,10 @@
 
 #include <algorithm>
 
+#if __has_feature(ptrauth_calls)
+  #include <ptrauth.h>
+#endif
+
 #include "dlfcn.h"
 
 #include "AllImages.h"
@@ -55,7 +59,7 @@ void                    parseDlHandle(void* h, const MachOLoaded** mh, bool* don
 
 
 // only in macOS and deprecated 
-#if __MAC_OS_X_VERSION_MIN_REQUIRED
+#if TARGET_OS_OSX
 
 // macOS needs to support an old API that only works with fileype==MH_BUNDLE.
 // In this deprecated API (unlike dlopen), loading and linking are separate steps.
@@ -70,7 +74,7 @@ NSObjectFileImageReturnCode NSCreateObjectFileImageFromFile(const char* path, NS
 
     // verify path exists
      struct stat statbuf;
-    if ( ::stat(path, &statbuf) == -1 )
+    if ( dyld3::stat(path, &statbuf) == -1 )
         return NSObjectFileImageFailure;
 
     // create ofi that just contains path. NSLinkModule does all the work
@@ -98,13 +102,13 @@ NSObjectFileImageReturnCode NSCreateObjectFileImageFromMemory(const void* memIma
     bool usable = false;
     const MachOFile* mf = (MachOFile*)memImage;
     if ( mf->hasMachOMagic() && mf->isMachO(diag, memImageSize) ) {
-        usable = (gAllImages.archs().grade(mf->cputype, mf->cpusubtype) != 0);
+        usable = (gAllImages.archs().grade(mf->cputype, mf->cpusubtype, false) != 0);
     }
     else if ( const FatFile* ff = FatFile::isFatFile(memImage) ) {
         uint64_t sliceOffset;
         uint64_t sliceLen;
         bool     missingSlice;
-        if ( ff->isFatFileWithSlice(diag, memImageSize, gAllImages.archs(), sliceOffset, sliceLen, missingSlice) ) {
+        if ( ff->isFatFileWithSlice(diag, memImageSize, gAllImages.archs(), false, sliceOffset, sliceLen, missingSlice) ) {
             mf = (MachOFile*)((long)memImage+sliceOffset);
             if ( mf->isMachO(diag, sliceLen) ) {
                 usable = true;
@@ -112,7 +116,7 @@ NSObjectFileImageReturnCode NSCreateObjectFileImageFromMemory(const void* memIma
         }
     }
     if ( usable ) {
-        if ( !mf->supportsPlatform(Platform::macOS) )
+        if ( !mf->builtForPlatform(Platform::macOS) )
             usable = false;
     }
     if ( !usable ) {
@@ -343,10 +347,15 @@ const char* NSLibraryNameForModule(NSModule m)
 
 static bool flatFindSymbol(const char* symbolName, void** symbolAddress, const mach_header** foundInImageAtLoadAddress)
 {
+    // <rdar://problem/59265987> allow flat lookup to find "_memcpy" even though it is not implemented as that name in any dylib
+    MachOLoaded::DependentToMachOLoaded finder = ^(const MachOLoaded* mh, uint32_t depIndex) {
+        return gAllImages.findDependent(mh, depIndex);
+    };
+
     __block bool result = false;
     gAllImages.forEachImage(^(const LoadedImage& loadedImage, bool& stop) {
         bool resultPointsToInstructions = false;
-        if ( loadedImage.loadedAddress()->hasExportedSymbol(symbolName, nullptr, symbolAddress, &resultPointsToInstructions) ) {
+        if ( loadedImage.loadedAddress()->hasExportedSymbol(symbolName, finder, symbolAddress, &resultPointsToInstructions) ) {
             *foundInImageAtLoadAddress = loadedImage.loadedAddress();
             stop = true;
             result = true;
@@ -446,8 +455,35 @@ void* NSAddressOfSymbol(NSSymbol symbol)
 {
     log_apis("NSAddressOfSymbol(%p)\n", symbol);
 
+	if ( symbol == nullptr )
+		return nullptr;
+
     // in dyld 1.0, NSSymbol was a pointer to the nlist entry in the symbol table
-    return (void*)symbol;
+    void *result = (void*)symbol;
+
+#if __has_feature(ptrauth_calls)
+    __block const MachOLoaded *module = nullptr;
+    gAllImages.infoForImageMappedAt(symbol, ^(const LoadedImage& foundImage, uint8_t permissions) {
+        module = foundImage.loadedAddress();
+    });
+
+    int64_t slide = module->getSlide();
+    __block bool resultPointsToInstructions = false;
+    module->forEachSection(^(const MachOAnalyzer::SectionInfo& sectInfo, bool malformedSectionRange, bool& stop) {
+        uint64_t sectStartAddr = sectInfo.sectAddr + slide;
+        uint64_t sectEndAddr = sectStartAddr + sectInfo.sectSize;
+        if ( ((uint64_t)result >= sectStartAddr) && ((uint64_t)result < sectEndAddr) ) {
+            resultPointsToInstructions = (sectInfo.sectFlags & S_ATTR_PURE_INSTRUCTIONS) || (sectInfo.sectFlags & S_ATTR_SOME_INSTRUCTIONS);
+            stop = true;
+        }
+    });
+
+    if (resultPointsToInstructions) {
+        result = __builtin_ptrauth_sign_unauthenticated(result, ptrauth_key_asia, 0);
+    }
+#endif
+
+    return result;
 }
 
 NSModule NSModuleForSymbol(NSSymbol symbol)

@@ -7,84 +7,90 @@
 #include <string.h>
 #include <mach-o/dyld_priv.h>
 
+#include "test_support.h"
+
 extern struct mach_header __dso_handle;
 
-int main()
-{
-    printf("[BEGIN] dyld_version_spi\n");
+int main(int argc, const char* argv[], const char* envp[], const char* apple[]) {
     dyld_platform_t active = dyld_get_active_platform();
     dyld_platform_t base = dyld_get_base_platform(active);
     dyld_build_version_t absoluteMin = { .platform = base, .version = 0 };
     dyld_build_version_t absoluteMax = { .platform = base, .version = 0xffffffff };
+    // We choose  high platform value that is unlikely to ever be used, and a non-zero version number
+    // If the platform number we choose here is ever used it will fail on that platform and this test will need to be fixed.
+    dyld_build_version_t bogusPlatformVersion = { .platform = 0xffff0000, .version = 1 };
 
 #if TARGET_OS_OSX
     if ( base != PLATFORM_MACOS ) {
-        printf("[FAIL] base.platform %u incorrect for macOS\n", base);
-        return 0;
+        FAIL("base.platform %u incorrect for macOS", base);
     }
 #elif TARGET_OS_IOS
     if ( base != PLATFORM_IOS ) {
-        printf("[FAIL] base.platform %u incorrect for iOS\n", base);
-        return 0;
+        FAIL("base.platform %u incorrect for iOS", base);
     }
 #elif TARGET_OS_TV
     if ( base != PLATFORM_TVOS ) {
-        printf("[FAIL] base.platform %u incorrect for tvOS\n", base);
-        return 0;
+        FAIL("base.platform %u incorrect for tvOS", base);
     }
 #elif TARGET_OS_BRIDGE
     if ( base != PLATFORM_BRIDGEOS ) {
-        printf("[FAIL] base.platform %u incorrect for wacthOS\n", base);
-        return 0;
+        FAIL("base.platform %u incorrect for wacthOS", base);
     }
 #elif TARGET_OS_WATCH
     if ( base != PLATFORM_WATCHOS ) {
-        printf("[FAIL] base.platform %u incorrect for bridgeOS\n", base);
-        return 0;
+        FAIL("base.platform %u incorrect for bridgeOn", base);
     }
 #else
-    printf("[FAIL] Running on unknown platform\n");
-    return 0;
+    FAIL("Running on unknown platform");
 #endif
 
 #if TARGET_OS_SIMULATOR
     if (dyld_is_simulator_platform(active) != true) {
-        printf("[FAIL] active platform %u should be a simulator\n", active);
-        return 0;
+        FAIL("active platform %u should be a simulator", active);
     }
 #else
     if (dyld_is_simulator_platform(active) == true) {
-        printf("[FAIL] active platform %u should not be a simulator\n", active);
-        return 0;
+        FAIL("active platform %u should not be a simulator", active);
     }
 #endif
 
     if (dyld_is_simulator_platform(base) == true) {
-        printf("[FAIL] base platform %u should not be a simulator\n", base);
-        return 0;
+        FAIL("base platform %u should not be a simulator", base);
     }
 
     if (!dyld_sdk_at_least(&__dso_handle, absoluteMin)) {
-        printf("[FAIL] executable sdk version should not < 1.0.0\n");
-        return 0;
+        FAIL("executable sdk version should not < 1.0.0");
     }
 
     if (dyld_sdk_at_least(&__dso_handle, absoluteMax)) {
-        printf("[FAIL] executable sdk version should not > 65536.0.0\n");
-        return 0;
+        FAIL("executable sdk version should not > 65536.0.0");
     }
 
     if (!dyld_minos_at_least(&__dso_handle, absoluteMin)) {
-        printf("[FAIL] executable min version should not < 1.0.0\n");
-        return 0;
+        FAIL("executable min version should not < 1.0.0");
     }
 
     if (dyld_minos_at_least(&__dso_handle, absoluteMax)) {
-        printf("[FAIL] executable min version should not > 65536.0.0\n");
-        return 0;
+        FAIL("executable min version should not > 65536.0.0");
     }
 
-    printf("[PASS] dyld_version_spi\n");
-    return 0;
+    if (dyld_minos_at_least(&__dso_handle, bogusPlatformVersion)) {
+        FAIL("dyld_minos_at_least should be false for bogus platform");
+    }
+
+    if (dyld_program_minos_at_least(bogusPlatformVersion)) {
+        FAIL("dyld_program_minos_at_least should be false for bogus platform");
+    }
+
+    if (dyld_sdk_at_least(&__dso_handle, bogusPlatformVersion)) {
+        FAIL("dyld_sdk_at_least should be false for bogus platform");
+    }
+
+    if (dyld_program_sdk_at_least(bogusPlatformVersion)) {
+        FAIL("dyld_program_sdk_at_least should be false for bogus platform");
+    }
+
+
+    PASS("Success");
 }
 

@@ -35,8 +35,7 @@
 #include "DyldSharedCache.h"
 #include "Diagnostics.h"
 #include "MachOAnalyzer.h"
-
-
+#include "IMPCaches.hpp"
 
 template <typename P> class LinkeditOptimizer;
 
@@ -44,6 +43,7 @@ template <typename P> class LinkeditOptimizer;
 class CacheBuilder {
 public:
     CacheBuilder(const DyldSharedCache::CreateOptions& options, const dyld3::closure::FileSystem& fileSystem);
+    virtual ~CacheBuilder();
 
     struct InputFile {
         enum State {
@@ -69,30 +69,26 @@ public:
         InputFile*                      inputFile;
     };
 
-    void                                        build(std::vector<InputFile>& inputFiles,
-                                                      std::vector<DyldSharedCache::FileAlias>& aliases);
-    void                                        build(const std::vector<LoadedMachO>& dylibs,
-                                                      const std::vector<LoadedMachO>& otherOsDylibsInput,
-                                                      const std::vector<LoadedMachO>& osExecutables,
-                                                      std::vector<DyldSharedCache::FileAlias>& aliases);
-    void                                        build(const std::vector<DyldSharedCache::MappedMachO>&  dylibsToCache,
-                                                      const std::vector<DyldSharedCache::MappedMachO>&  otherOsDylibs,
-                                                      const std::vector<DyldSharedCache::MappedMachO>&  osExecutables,
-                                                      std::vector<DyldSharedCache::FileAlias>& aliases);
-    void                                        writeFile(const std::string& path);
-    void                                        writeBuffer(uint8_t*& buffer, uint64_t& size);
-    void                                        writeMapFile(const std::string& path);
-    std::string                                 getMapFileBuffer(const std::string& cacheDisposition) const;
-    void                                        deleteBuffer();
     std::string                                 errorMessage();
-    const std::set<std::string>                 warnings();
-    const std::set<const dyld3::MachOAnalyzer*> evictions();
-    const bool                                  agileSignature();
-    const std::string                           cdHashFirst();
-    const std::string                           cdHashSecond();
-    const std::string                           uuid() const;
 
-    void forEachCacheDylib(void (^callback)(const std::string& path));
+    struct Region
+    {
+        uint8_t*    buffer                          = nullptr;
+        uint64_t    bufferSize                      = 0;
+        uint64_t    sizeInUse                       = 0;
+        uint64_t    unslidLoadAddress               = 0;
+        uint64_t    cacheFileOffset                 = 0;
+        uint8_t     initProt                        = 0;
+        uint8_t     maxProt                         = 0;
+        std::string name;
+        uint64_t    index                  = ~0ULL; // The index of this region in the final binary
+
+        // Each region can optionally have its own slide info
+        uint8_t*    slideInfoBuffer                 = nullptr;
+        uint64_t    slideInfoBufferSizeAllocated    = 0;
+        uint64_t    slideInfoFileOffset             = 0;
+        uint64_t    slideInfoFileSize               = 0;
+    };
 
     struct SegmentMappingInfo {
         const void*     srcSegment;
@@ -104,6 +100,8 @@ public:
         uint32_t        dstCacheFileSize;
         uint32_t        copySegmentSize;
         uint32_t        srcSegmentIndex;
+        // Used by the AppCacheBuilder to work out which one of the regions this segment is in
+        const Region*   parentRegion            = nullptr;
     };
 
     struct DylibTextCoalescer {
@@ -114,9 +112,12 @@ public:
         DylibSectionOffsetToCacheSectionOffset objcMethNames;
         DylibSectionOffsetToCacheSectionOffset objcMethTypes;
 
-        bool sectionWasCoalesced(std::string_view sectionName) const;
-        DylibSectionOffsetToCacheSectionOffset& getSectionCoalescer(std::string_view sectionName);
-        const DylibSectionOffsetToCacheSectionOffset& getSectionCoalescer(std::string_view sectionName) const;
+        DylibSectionOffsetToCacheSectionOffset cfStrings;
+
+        bool segmentWasCoalesced(std::string_view segmentName) const;
+        bool sectionWasCoalesced(std::string_view segmentName, std::string_view sectionName) const;
+        DylibSectionOffsetToCacheSectionOffset& getSectionCoalescer(std::string_view segmentName, std::string_view sectionName);
+        const DylibSectionOffsetToCacheSectionOffset& getSectionCoalescer(std::string_view segmentName, std::string_view sectionName) const;
     };
 
     struct CacheCoalescedText {
@@ -132,75 +133,131 @@ public:
             uint64_t                             savedSpace       = 0;
         };
 
+        struct CFSection {
+            uint8_t*                             bufferAddr         = nullptr;
+            uint32_t                             bufferSize         = 0;
+            uint64_t                             bufferVMAddr       = 0;
+            uint64_t                             cacheFileOffset    = 0;
+
+            // The install name of the dylib for the ISA
+            const char*                          isaInstallName     = nullptr;
+            const char*                          isaClassName       = "___CFConstantStringClassReference";
+            uint64_t                             isaVMOffset        = 0;
+        };
+
         StringSection objcClassNames;
         StringSection objcMethNames;
         StringSection objcMethTypes;
 
+        CFSection     cfStrings;
+
         void parseCoalescableText(const dyld3::MachOAnalyzer* ma,
-                                   DylibTextCoalescer& textCoalescer);
+                                  DylibTextCoalescer& textCoalescer,
+                                  const IMPCaches::SelectorMap& selectors,
+                                  IMPCaches::HoleMap& selectorHoleMap);
+        void parseCFConstants(const dyld3::MachOAnalyzer* ma,
+                              DylibTextCoalescer& textCoalescer);
         void clear();
 
         StringSection& getSectionData(std::string_view sectionName);
         const StringSection& getSectionData(std::string_view sectionName) const;
+        uint64_t getSectionVMAddr(std::string_view segmentName, std::string_view sectionName) const;
+        uint8_t* getSectionBufferAddr(std::string_view segmentName, std::string_view sectionName) const;
+        uint64_t getSectionObjcTag(std::string_view segmentName, std::string_view sectionName) const;
     };
 
     class ASLR_Tracker
     {
     public:
-                ~ASLR_Tracker();
+        ASLR_Tracker() = default;
+        ~ASLR_Tracker();
+
+        ASLR_Tracker(ASLR_Tracker&&) = delete;
+        ASLR_Tracker(const ASLR_Tracker&) = delete;
+        ASLR_Tracker& operator=(ASLR_Tracker&& other) = delete;
+        ASLR_Tracker& operator=(const ASLR_Tracker& other) = delete;
 
         void        setDataRegion(const void* rwRegionStart, size_t rwRegionSize);
-        void        add(void* p);
+        void        add(void* loc, uint8_t level = (uint8_t)~0);
+        void        setHigh8(void* p, uint8_t high8);
+        void        setAuthData(void* p, uint16_t diversity, bool hasAddrDiv, uint8_t key);
+        void        setRebaseTarget32(void*p, uint32_t targetVMAddr);
+        void        setRebaseTarget64(void*p, uint64_t targetVMAddr);
         void        remove(void* p);
-        bool        has(void* p);
+        bool        has(void* loc, uint8_t* level = nullptr) const;
         const bool* bitmap()        { return _bitmap; }
         unsigned    dataPageCount() { return _pageCount; }
-        void        disable() { _enabled = false; };
+        unsigned    pageSize() const { return _pageSize; }
+        void        disable()       { _enabled = false; };
+        bool        hasHigh8(void* p, uint8_t* highByte) const;
+        bool        hasAuthData(void* p, uint16_t* diversity, bool* hasAddrDiv, uint8_t* key) const;
+        bool        hasRebaseTarget32(void* p, uint32_t* vmAddr) const;
+        bool        hasRebaseTarget64(void* p, uint64_t* vmAddr) const;
+
+        // Get all the out of band rebase targets.  Used for the kernel collection builder
+        // to emit the classic relocations
+        std::vector<void*> getRebaseTargets() const;
 
     private:
 
+        enum {
+#if BUILDING_APP_CACHE_UTIL
+            // The x86_64 kernel collection needs 1-byte aligned fixups
+            kMinimumFixupAlignment = 1
+#else
+            // Shared cache fixups must be at least 4-byte aligned
+            kMinimumFixupAlignment = 4
+#endif
+        };
+
         uint8_t*     _regionStart    = nullptr;
-        uint8_t*     _endStart       = nullptr;
+        uint8_t*     _regionEnd      = nullptr;
         bool*        _bitmap         = nullptr;
         unsigned     _pageCount      = 0;
         unsigned     _pageSize       = 4096;
         bool         _enabled        = true;
+
+        struct AuthData {
+            uint16_t    diversity;
+            bool        addrDiv;
+            uint8_t     key;
+        };
+        std::unordered_map<void*, uint8_t>  _high8Map;
+        std::unordered_map<void*, AuthData> _authDataMap;
+        std::unordered_map<void*, uint32_t> _rebaseTarget32;
+        std::unordered_map<void*, uint64_t> _rebaseTarget64;
+
+        // For kernel collections to work out which other collection a given
+        // fixup is relative to
+#if BUILDING_APP_CACHE_UTIL
+        uint8_t*                            _cacheLevels = nullptr;
+#endif
     };
 
     typedef std::map<uint64_t, std::set<void*>> LOH_Tracker;
 
-    struct Region
-    {
-        uint8_t*    buffer                 = nullptr;
-        uint64_t    bufferSize             = 0;
-        uint64_t    sizeInUse              = 0;
-        uint64_t    unslidLoadAddress      = 0;
-        uint64_t    cacheFileOffset        = 0;
+    // For use by the LinkeditOptimizer to work out which symbols to strip on each binary
+    enum class DylibStripMode {
+        stripNone,
+        stripLocals,
+        stripExports,
+        stripAll
     };
 
-private:
+    struct DylibInfo
+    {
+        const LoadedMachO*              input;
+        std::string                     dylibID;
+        std::vector<SegmentMappingInfo> cacheLocation;
+        DylibTextCoalescer              textCoalescer;
+
+        // <class name, metaclass> -> pointer
+        std::unordered_map<IMPCaches::ClassKey, std::unique_ptr<IMPCaches::ClassData>, IMPCaches::ClassKeyHasher> impCachesClassData;
+    };
+
+protected:
     template <typename P>
     friend class LinkeditOptimizer;
-    
-    struct ArchLayout
-    {
-        uint64_t    sharedMemoryStart;
-        uint64_t    sharedMemorySize;
-        uint64_t    textAndDataMaxSize;
-        uint64_t    sharedRegionPadding;
-        uint64_t    pointerDeltaMask;
-        const char* archName;
-        uint16_t    csPageSize;
-        uint8_t     sharedRegionAlignP2;
-        uint8_t     slideInfoBytesPerPage;
-        bool        sharedRegionsAreDiscontiguous;
-        bool        is64;
-        bool        useValueAdd;
-    };
-
-    static const ArchLayout  _s_archLayout[];
-    static const char* const _s_neverStubEliminateDylibs[];
-    static const char* const _s_neverStubEliminateSymbols[];
 
     struct UnmappedRegion
     {
@@ -209,110 +266,47 @@ private:
         uint64_t    sizeInUse              = 0;
     };
 
-    struct DylibInfo
-    {
-        const LoadedMachO*              input;
-        std::string                     runtimePath;
-        std::vector<SegmentMappingInfo> cacheLocation;
-        DylibTextCoalescer              textCoalescer;
-    };
+    // Virtual methods overridden by the shared cache builder and app cache builder
+    virtual void forEachDylibInfo(void (^callback)(const DylibInfo& dylib, Diagnostics& dylibDiag)) = 0;
 
-    void        makeSortedDylibs(const std::vector<LoadedMachO>& dylibs, const std::unordered_map<std::string, unsigned> sortOrder);
-    void        processSelectorStrings(const std::vector<LoadedMachO>& executables);
-    void        parseCoalescableSegments();
-    void        assignSegmentAddresses();
-
-    uint64_t    cacheOverflowAmount();
-    size_t      evictLeafDylibs(uint64_t reductionTarget, std::vector<const LoadedMachO*>& overflowDylibs);
-
-    void        fipsSign();
-    void        codeSign();
-    uint64_t    pathHash(const char* path);
-    void        writeCacheHeader();
     void        copyRawSegments();
-    void        adjustAllImagesForNewSegmentLocations();
-    void        writeSlideInfoV1();
-    void        writeSlideInfoV3(const bool bitmap[], unsigned dataPageCoun);
-    uint16_t    pageStartV3(uint8_t* pageContent, uint32_t pageSize, const bool bitmap[]);
-    void        findDylibAndSegment(const void* contentPtr, std::string& dylibName, std::string& segName);
-    void        addImageArray();
-    void        buildImageArray(std::vector<DyldSharedCache::FileAlias>& aliases);
-    void        addOtherImageArray(const std::vector<LoadedMachO>&, std::vector<const LoadedMachO*>& overflowDylibs);
-    void        addClosures(const std::vector<LoadedMachO>&);
-    void        markPaddingInaccessible();
-
-    bool        writeCache(void (^cacheSizeCallback)(uint64_t size), bool (^copyCallback)(const uint8_t* src, uint64_t size, uint64_t dstOffset));
-
-    template <typename P> void writeSlideInfoV2(const bool bitmap[], unsigned dataPageCount);
-    template <typename P> bool makeRebaseChainV2(uint8_t* pageContent, uint16_t lastLocationOffset, uint16_t newOffset, const struct dyld_cache_slide_info2* info);
-    template <typename P> void addPageStartsV2(uint8_t* pageContent, const bool bitmap[], const struct dyld_cache_slide_info2* info,
-                                             std::vector<uint16_t>& pageStarts, std::vector<uint16_t>& pageExtras);
-
-    template <typename P> void writeSlideInfoV4(const bool bitmap[], unsigned dataPageCount);
-    template <typename P> bool makeRebaseChainV4(uint8_t* pageContent, uint16_t lastLocationOffset, uint16_t newOffset, const struct dyld_cache_slide_info4* info);
-    template <typename P> void addPageStartsV4(uint8_t* pageContent, const bool bitmap[], const struct dyld_cache_slide_info4* info,
-                                             std::vector<uint16_t>& pageStarts, std::vector<uint16_t>& pageExtras);
+    void        adjustAllImagesForNewSegmentLocations(uint64_t cacheBaseAddress,
+                                                      ASLR_Tracker& aslrTracker, LOH_Tracker* lohTracker,
+                                                      const CacheBuilder::CacheCoalescedText* coalescedText);
 
     // implemented in AdjustDylibSegemnts.cpp
-    void        adjustDylibSegments(const DylibInfo& dylib, Diagnostics& diag) const;
+    void        adjustDylibSegments(const DylibInfo& dylib, Diagnostics& diag,
+                                    uint64_t cacheBaseAddress,
+                                    CacheBuilder::ASLR_Tracker& aslrTracker,
+                                    CacheBuilder::LOH_Tracker* lohTracker,
+                                    const CacheBuilder::CacheCoalescedText* coalescedText) const;
 
     // implemented in OptimizerLinkedit.cpp
-    void        optimizeLinkedit();
-
-    // implemented in OptimizerObjC.cpp
-    void        optimizeObjC();
-    uint32_t    computeReadOnlyObjC(uint32_t selRefCount, uint32_t classDefCount, uint32_t protocolDefCount);
-    uint32_t    computeReadWriteObjC(uint32_t imageCount, uint32_t protocolDefCount);
+    void        optimizeLinkedit(UnmappedRegion* localSymbolsRegion,
+                                 const std::vector<std::tuple<const mach_header*, const char*, DylibStripMode>>& images);
 
     // implemented in OptimizerBranches.cpp
-    void        optimizeAwayStubs();
-
-    typedef std::unordered_map<std::string, const dyld3::MachOAnalyzer*> InstallNameToMA;
-
-    typedef uint64_t                                                CacheOffset;
+    void        optimizeAwayStubs(const std::vector<std::pair<const mach_header*, const char*>>& images,
+                                  int64_t cacheSlide, uint64_t cacheUnslidAddr,
+                                  const DyldSharedCache* dyldCache,
+                                  const char* const neverStubEliminateSymbols[]);
 
     const DyldSharedCache::CreateOptions&       _options;
     const dyld3::closure::FileSystem&           _fileSystem;
     Region                                      _readExecuteRegion;
-    Region                                      _readWriteRegion;
     Region                                      _readOnlyRegion;
     UnmappedRegion                              _localSymbolsRegion;
-    UnmappedRegion                              _codeSignatureRegion;
     vm_address_t                                _fullAllocatedBuffer;
     uint64_t                                    _nonLinkEditReadOnlySize;
     Diagnostics                                 _diagnostics;
-    std::set<const dyld3::MachOAnalyzer*>       _evictions;
-    const ArchLayout*                           _archLayout;
-    uint32_t                                    _aliasCount;
-    uint64_t                                    _slideInfoFileOffset;
-    uint64_t                                    _slideInfoBufferSizeAllocated;
-    uint8_t*                                    _objcReadOnlyBuffer;
-    uint64_t                                    _objcReadOnlyBufferSizeUsed;
-    uint64_t                                    _objcReadOnlyBufferSizeAllocated;
-    uint8_t*                                    _objcReadWriteBuffer;
-    uint64_t                                    _objcReadWriteBufferSizeAllocated;
+    TimeRecorder                                _timeRecorder;
     uint64_t                                    _allocatedBufferSize;
     CacheCoalescedText                          _coalescedText;
-    uint64_t                                    _selectorStringsFromExecutables;
-    std::vector<DylibInfo>                      _sortedDylibs;
-    InstallNameToMA                             _installNameToCacheDylib;
-    std::unordered_map<std::string, uint32_t>   _dataDirtySegsOrder;
+    bool                                        _is64                       = false;
     // Note this is mutable as the only parallel writes to it are done atomically to the bitmap
     mutable ASLR_Tracker                        _aslrTracker;
-    std::map<void*, std::string>                _missingWeakImports;
     mutable LOH_Tracker                         _lohTracker;
-    const dyld3::closure::ImageArray*           _imageArray;
-    uint32_t                                    _sharedStringsPoolVmOffset;
-    uint8_t                                     _cdHashFirst[20];
-    uint8_t                                     _cdHashSecond[20];
-    std::unordered_map<const dyld3::MachOLoaded*, std::set<CacheOffset>>        _dylibToItsExports;
-    std::set<std::pair<const dyld3::MachOLoaded*, CacheOffset>>                 _dylibWeakExports;
-    std::unordered_map<CacheOffset, std::vector<dyld_cache_patchable_location>> _exportsToUses;
-    std::unordered_map<CacheOffset, std::string>                                _exportsToName;
 };
-
-
-
 
 inline uint64_t align(uint64_t addr, uint8_t p2)
 {
@@ -320,6 +314,10 @@ inline uint64_t align(uint64_t addr, uint8_t p2)
     return (addr + mask - 1) & (-mask);
 }
 
+inline uint8_t* align_buffer(uint8_t* addr, uint8_t p2)
+{
+    return (uint8_t *)align((uintptr_t)addr, p2);
+}
 
 
 #endif /* CacheBuilder_h */

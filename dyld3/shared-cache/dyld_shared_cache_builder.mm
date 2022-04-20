@@ -49,6 +49,7 @@
 
 #include <vector>
 #include <array>
+#include <list>
 #include <set>
 #include <map>
 #include <unordered_set>
@@ -59,11 +60,13 @@
 #include <spawn.h>
 
 #include <Bom/Bom.h>
+#include <Foundation/NSData.h>
+#include <Foundation/NSDictionary.h>
+#include <Foundation/NSPropertyList.h>
+#include <Foundation/NSString.h>
 
-#include "Manifest.h"
 #include "Diagnostics.h"
 #include "DyldSharedCache.h"
-#include "BuilderUtils.h"
 #include "FileUtils.h"
 #include "JSONReader.h"
 #include "JSONWriter.h"
@@ -100,18 +103,18 @@ int runCommandAndWait(Diagnostics& diags, const char* args[])
     return res;
 }
 
-void processRoots(Diagnostics& diags, std::set<std::string>& roots, const char *tempRootsDir)
+void processRoots(Diagnostics& diags, std::list<std::string>& roots, const char *tempRootsDir)
 {
-    std::set<std::string> processedRoots;
-    struct stat           sb;
-    int                   res = 0;
-    const char*           args[8];
+    std::list<std::string>  processedRoots;
+    struct stat             sb;
+    int                     res = 0;
+    const char*             args[8];
 
     for (const auto& root : roots) {
         res = stat(root.c_str(), &sb);
 
         if (res == 0 && S_ISDIR(sb.st_mode)) {
-            processedRoots.insert(root);
+            processedRoots.push_back(root);
             continue;
         }
 
@@ -149,13 +152,6 @@ void processRoots(Diagnostics& diags, std::set<std::string>& roots, const char *
             args[3] = (char*)"-C";
             args[4] = tempRootDir;
             args[5] = nullptr;
-        } else if (endsWith(root, ".xar")) {
-            args[0] = (char*)"/usr/bin/xar";
-            args[1] = (char*)"-xf";
-            args[2] = (char*)root.c_str();
-            args[3] = (char*)"-C";
-            args[4] = tempRootDir;
-            args[5] = nullptr;
         } else if (endsWith(root, ".zip")) {
             args[0] = (char*)"/usr/bin/ditto";
             args[1] = (char*)"-xk";
@@ -176,13 +172,13 @@ void processRoots(Diagnostics& diags, std::set<std::string>& roots, const char *
                 return;
         }
 
-        processedRoots.insert(tempRootDir);
+        processedRoots.push_back(tempRootDir);
     }
 
     roots = processedRoots;
 }
 
-void writeRootList(const std::string& dstRoot, const std::set<std::string>& roots)
+void writeRootList(const std::string& dstRoot, const std::list<std::string>& roots)
 {
     if (roots.size() == 0)
         return;
@@ -199,43 +195,34 @@ void writeRootList(const std::string& dstRoot, const std::set<std::string>& root
     ::fclose(froots);
 }
 
-BOMCopierCopyOperation filteredCopyExcludingPaths(BOMCopier copier, const char* path, BOMFSObjType type, off_t size)
-{
-    std::string absolutePath = &path[1];
-    void *userData = BOMCopierUserData(copier);
-    std::set<std::string> *cachePaths = (std::set<std::string>*)userData;
-    if (cachePaths->count(absolutePath)) {
-        return BOMCopierSkipFile;
-    }
-    return BOMCopierContinue;
-}
+struct FilteredCopyOptions {
+    Diagnostics*            diags               = nullptr;
+    std::set<std::string>*  cachePaths          = nullptr;
+    std::set<std::string>*  dylibsFoundInRoots  = nullptr;
+};
 
 BOMCopierCopyOperation filteredCopyIncludingPaths(BOMCopier copier, const char* path, BOMFSObjType type, off_t size)
 {
     std::string absolutePath = &path[1];
-    void *userData = BOMCopierUserData(copier);
-    std::set<std::string> *cachePaths = (std::set<std::string>*)userData;
-    for (const std::string& cachePath : *cachePaths) {
-        if (startsWith(cachePath, absolutePath))
-            return BOMCopierContinue;
+    const FilteredCopyOptions *userData = (const FilteredCopyOptions*)BOMCopierUserData(copier);
+
+    // Don't copy from the artifact if the dylib is actally in a -root
+    if ( userData->dylibsFoundInRoots->count(absolutePath) != 0 ) {
+        userData->diags->verbose("Skipping copying dylib from shared cache artifact as it is in a -root: '%s'\n", absolutePath.c_str());
+        return BOMCopierSkipFile;
     }
-    if (cachePaths->count(absolutePath)) {
+
+    for (const std::string& cachePath : *userData->cachePaths) {
+        if (startsWith(cachePath, absolutePath)) {
+            userData->diags->verbose("Copying dylib from shared cache artifact: '%s'\n", absolutePath.c_str());
+            return BOMCopierContinue;
+        }
+    }
+    if (userData->cachePaths->count(absolutePath)) {
+        userData->diags->verbose("Copying dylib from shared cache artifact: '%s'\n", absolutePath.c_str());
         return BOMCopierContinue;
     }
     return BOMCopierSkipFile;
-}
-
-static std::string dispositionToString(Disposition disposition) {
-    switch (disposition) {
-        case Unknown:
-            return "Unknown";
-        case InternalDevelopment:
-            return "InternalDevelopment";
-        case Customer:
-            return "Customer";
-        case InternalMinDevelopment:
-            return "InternalMinDevelopment";
-    }
 }
 
 static Disposition stringToDisposition(Diagnostics& diags, const std::string& str) {
@@ -252,37 +239,12 @@ static Disposition stringToDisposition(Diagnostics& diags, const std::string& st
     return Unknown;
 }
 
-static std::string platformToString(Platform platform) {
-    switch (platform) {
-        case unknown:
-            return "unknown";
-        case macOS:
-            return "macOS";
-        case iOS:
-            return "iOS";
-        case tvOS:
-            return "tvOS";
-        case watchOS:
-            return "watchOS";
-        case bridgeOS:
-            return "bridgeOS";
-        case iOSMac:
-            return "UIKitForMac";
-        case iOS_simulator:
-            return "iOS_simulator";
-        case tvOS_simulator:
-            return "tvOS_simulator";
-        case watchOS_simulator:
-            return "watchOS_simulator";
-    }
-}
-
 static Platform stringToPlatform(Diagnostics& diags, const std::string& str) {
     if (diags.hasError())
         return unknown;
     if (str == "unknown")
         return unknown;
-    if (str == "macOS")
+    if ( (str == "macOS") || (str == "osx") )
         return macOS;
     if (str == "iOS")
         return iOS;
@@ -305,23 +267,6 @@ static Platform stringToPlatform(Diagnostics& diags, const std::string& str) {
     return unknown;
 }
 
-static std::string fileFlagsToString(FileFlags fileFlags) {
-    switch (fileFlags) {
-        case NoFlags:
-            return "NoFlags";
-        case MustBeInCache:
-            return "MustBeInCache";
-        case ShouldBeExcludedFromCacheIfUnusedLeaf:
-            return "ShouldBeExcludedFromCacheIfUnusedLeaf";
-        case RequiredClosure:
-            return "RequiredClosure";
-        case DylibOrderFile:
-            return "DylibOrderFile";
-        case DirtyDataOrderFile:
-            return "DirtyDataOrderFile";
-    }
-}
-
 static FileFlags stringToFileFlags(Diagnostics& diags, const std::string& str) {
     if (diags.hasError())
         return NoFlags;
@@ -337,48 +282,37 @@ static FileFlags stringToFileFlags(Diagnostics& diags, const std::string& str) {
         return DylibOrderFile;
     if (str == "DirtyDataOrderFile")
         return DirtyDataOrderFile;
+    if (str == "ObjCOptimizationsFile")
+        return ObjCOptimizationsFile;
     return NoFlags;
 }
 
-static dyld3::json::Node getBuildOptionsNode(BuildOptions_v1 buildOptions) {
-    dyld3::json::Node buildOptionsNode;
-    buildOptionsNode.map["version"].value             = dyld3::json::decimal(buildOptions.version);
-    buildOptionsNode.map["updateName"].value          = buildOptions.updateName;
-    buildOptionsNode.map["deviceName"].value          = buildOptions.deviceName;
-    buildOptionsNode.map["disposition"].value         = dispositionToString(buildOptions.disposition);
-    buildOptionsNode.map["platform"].value            = platformToString(buildOptions.platform);
-    for (unsigned i = 0; i != buildOptions.numArchs; ++i) {
-        dyld3::json::Node archNode;
-        archNode.value = buildOptions.archs[i];
-        buildOptionsNode.map["archs"].array.push_back(archNode);
-    }
-    return buildOptionsNode;
-}
-
 struct SharedCacheBuilderOptions {
-    Diagnostics           diags;
-    std::set<std::string> roots;
-    std::string           dylibCacheDir;
-    std::string           artifactDir;
-    std::string           release;
-    bool                  emitDevCaches = true;
-    bool                  emitElidedDylibs = true;
-    bool                  listConfigs = false;
-    bool                  copyRoots = false;
-    bool                  debug = false;
-    bool                  useMRM = false;
-    std::string           dstRoot;
-    std::string           emitJSONPath;
-    std::string           buildAllPath;
-    std::string           configuration;
-    std::string           resultPath;
-    std::string           baselineDifferenceResultPath;
-    std::string           baselineCacheMapPath;
-    bool                  baselineCopyRoots = false;
+    Diagnostics                 diags;
+    std::list<std::string>      roots;
+    std::string                 dylibCacheDir;
+    std::string                 artifactDir;
+    std::string                 release;
+    bool                        emitDevCaches = true;
+    bool                        emitCustomerCaches = true;
+    bool                        emitElidedDylibs = true;
+    bool                        listConfigs = false;
+    bool                        copyRoots = false;
+    bool                        debug = false;
+    bool                        useMRM = false;
+    std::string                 dstRoot;
+    std::string                 emitJSONPath;
+    std::string                 buildAllPath;
+    std::string                 resultPath;
+    std::string                 baselineDifferenceResultPath;
+    std::list<std::string>      baselineCacheMapPaths;
+    bool                        baselineCopyRoots = false;
+    bool                        emitMapFiles = false;
+    std::set<std::string>       cmdLineArchs;
 };
 
 static void loadMRMFiles(Diagnostics& diags,
-                         SharedCacheBuilder* sharedCacheBuilder,
+                         MRMSharedCacheBuilder* sharedCacheBuilder,
                          const std::vector<std::tuple<std::string, std::string, FileFlags>>& inputFiles,
                          std::vector<std::pair<const void*, size_t>>& mappedFiles,
                          const std::set<std::string>& baselineCacheFiles) {
@@ -430,11 +364,53 @@ static void unloadMRMFiles(std::vector<std::pair<const void*, size_t>>& mappedFi
         ::munmap((void*)mappedFile.first, mappedFile.second);
 }
 
-static void writeMRMResults(bool cacheBuildSuccess, SharedCacheBuilder* sharedCacheBuilder, const SharedCacheBuilderOptions& options) {
+static ssize_t write64(int fildes, const void *buf, size_t nbyte)
+{
+    unsigned char* uchars = (unsigned char*)buf;
+    ssize_t total = 0;
+
+    while (nbyte)
+    {
+        /*
+         * If we were writing socket- or stream-safe code we'd chuck the
+         * entire buf to write(2) and then gracefully re-request bytes that
+         * didn't get written. But write(2) will return EINVAL if you ask it to
+         * write more than 2^31-1 bytes. So instead we actually need to throttle
+         * the input to write.
+         *
+         * Historically code using write(2) to write to disk will assert that
+         * that all of the requested bytes were written. It seems harmless to
+         * re-request bytes as one does when writing to streams, with the
+         * compromise that we will return immediately when write(2) returns 0
+         * bytes written.
+         */
+        size_t limit = 0x7FFFFFFF;
+        size_t towrite = nbyte < limit ? nbyte : limit;
+        ssize_t wrote = write(fildes, uchars, towrite);
+        if (-1 == wrote)
+        {
+            return -1;
+        }
+        else if (0 == wrote)
+        {
+            break;
+        }
+        else
+        {
+            nbyte -= wrote;
+            uchars += wrote;
+            total += wrote;
+        }
+    }
+
+    return total;
+}
+
+static bool writeMRMResults(bool cacheBuildSuccess, MRMSharedCacheBuilder* sharedCacheBuilder, const SharedCacheBuilderOptions& options) {
     if (!cacheBuildSuccess) {
         uint64_t errorCount = 0;
         if (const char* const* errors = getErrors(sharedCacheBuilder, &errorCount)) {
-            for (uint64 i = 0, e = errorCount; i != e; ++i) {
+            for (uint64_t i = 0, e = errorCount; i != e; ++i) {
                 const char* errorMessage = errors[i];
                 fprintf(stderr, "ERROR: %s\n", errorMessage);
             }
@@ -444,7 +420,7 @@ static void writeMRMResults(bool cacheBuildSuccess, SharedCacheBuilder* sharedCa
     // Now emit each cache we generated, or the errors for them.
     uint64_t cacheResultCount = 0;
     if (const CacheResult* const* cacheResults = getCacheResults(sharedCacheBuilder, &cacheResultCount)) {
-        for (uint64 i = 0, e = cacheResultCount; i != e; ++i) {
+        for (uint64_t i = 0, e = cacheResultCount; i != e; ++i) {
             const CacheResult& result = *(cacheResults[i]);
             // Always print the warnings if we have roots, even if there are errors
             if ( (result.numErrors == 0) || !options.roots.empty() ) {
@@ -462,7 +438,7 @@ static void writeMRMResults(bool cacheBuildSuccess, SharedCacheBuilder* sharedCa
     }
 
     if (!cacheBuildSuccess) {
-        exit(-1);
+        return false;
     }
 
     // If we built caches, then write everything out.
@@ -470,7 +446,7 @@ static void writeMRMResults(bool cacheBuildSuccess, SharedCacheBuilder* sharedCa
     if (cacheBuildSuccess && !options.dstRoot.empty()) {
         uint64_t fileResultCount = 0;
         if (const FileResult* const* fileResults = getFileResults(sharedCacheBuilder, &fileResultCount)) {
-            for (uint64 i = 0, e = fileResultCount; i != e; ++i) {
+            for (uint64_t i = 0, e = fileResultCount; i != e; ++i) {
                 const FileResult& result = *(fileResults[i]);
 
                 switch (result.behavior) {
@@ -491,7 +467,7 @@ static void writeMRMResults(bool cacheBuildSuccess, SharedCacheBuilder* sharedCa
                 int fd = mkstemp(pathTemplateSpace);
                 if ( fd != -1 ) {
                     ::ftruncate(fd, result.size);
-                    uint64_t writtenSize = pwrite(fd, result.data, result.size, 0);
+                    uint64_t writtenSize = write64(fd, result.data, result.size);
                     if ( writtenSize == result.size ) {
                         ::fchmod(fd, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH); // mkstemp() makes file "rw-------", switch it to "rw-r--r--"
                         if ( ::rename(pathTemplateSpace, path.c_str()) == 0) {
@@ -512,383 +488,60 @@ static void writeMRMResults(bool cacheBuildSuccess, SharedCacheBuilder* sharedCa
                 }
             }
         }
-    }
-}
 
-static void reportUnknownConfiguration(const std::string& configuration, dyld3::Manifest& manifest) {
-    fprintf(stderr, "** Unknown config '%s' for build %s.\n",
-            configuration.c_str(), manifest.build().c_str());
-
-    // Look for available configurations that the user might have meant.
-    // Substring match: print configs that contain the user's string.
-    // Regex match: if user wants "N61OS" then match .*N.*6.*1.*O.*S.*
-
-    std::string patternString = ".*";
-    for (auto c : configuration) {
-        if (isalnum(c)) {  // filter regex special characters
-            patternString += c;
-            patternString += ".*";
-        }
-    }
-    std::regex pattern(patternString);
-
-    std::vector<std::string> likelyConfigs{};
-    std::vector<std::string> allConfigs{};
-    manifest.forEachConfiguration([&](const std::string& configName) {
-        allConfigs.push_back(configName);
-        if (!configuration.empty()) {
-            if (configName.find(configuration) != std::string::npos || std::regex_match(configName, pattern)) {
-                likelyConfigs.push_back(configName);
-            }
-        }
-    });
-
-    if (!likelyConfigs.empty()) {
-        fprintf(stderr, "\nDid you mean:\n");
-        for (auto configName: likelyConfigs) {
-            fprintf(stderr, "%s\n", configName.c_str());
+        // Give up if we couldn't write the caches
+        if (!cacheBuildSuccess) {
+            return false;
         }
     }
 
-    fprintf(stderr, "\nAvailable configurations:\n");
-    for (auto configName : allConfigs) {
-        fprintf(stderr, "%s\n", configName.c_str());
-    }
-}
+    // Emit the map files
+    if ( options.emitMapFiles && !options.dstRoot.empty() ) {
+        uint64_t cacheResultCount = 0;
+        if (const CacheResult* const* cacheResults = getCacheResults(sharedCacheBuilder, &cacheResultCount)) {
+            for (uint64_t i = 0, e = cacheResultCount; i != e; ++i) {
+                const CacheResult& result = *(cacheResults[i]);
+                std::string_view jsonData = result.mapJSON;
+                if ( jsonData.empty() )
+                    continue;
 
-static void buildCacheFromPListManifest(Diagnostics& diags, const SharedCacheBuilderOptions& options) {
-    // Get the list of configurations, without fetching all of the files.
-    auto manifest = dyld3::Manifest(diags, options.dylibCacheDir + "/Manifest.plist", false);
-
-    if (manifest.build().empty()) {
-        fprintf(stderr, "No manifest found at '%s/Manifest.plist'\n", options.dylibCacheDir.c_str());
-        exit(-1);
-    }
-
-    // List configurations if requested.
-    if (options.listConfigs) {
-        manifest.forEachConfiguration([](const std::string& configName) {
-            printf("%s\n", configName.c_str());
-        });
-        // If we weren't passed a configuration then exit
-        if (options.configuration.empty())
-            exit(0);
-    }
-
-    // Stop if the requested configuration is unavailable.
-    if (!manifest.filterForConfig(options.configuration)) {
-        reportUnknownConfiguration(options.configuration, manifest);
-        exit(-1);
-    }
-
-    // Now finish initializing the manifest.
-    // This step is slow so we defer it until after the checks above.
-    fprintf(stderr, "Building Caches for %s\n", manifest.build().c_str());
-    manifest.populate(options.roots);
-
-    (void)mkpath_np((options.dstRoot + "/System/Library/Caches/com.apple.dyld/").c_str(), 0755);
-    bool cacheBuildSuccess = false;
-    if (options.useMRM) {
-
-        std::ofstream jsonFile;
-        if (!options.emitJSONPath.empty()) {
-            jsonFile.open(options.emitJSONPath, std::ofstream::out);
-            if (!jsonFile.is_open()) {
-                diags.verbose("can't open file '%s'\n", options.emitJSONPath.c_str());
-                return;
-            }
-        }
-        dyld3::json::Node buildInvocationNode;
-
-        buildInvocationNode.map["version"].value = "1";
-
-        // Find the archs for the configuration we want.
-        __block std::set<std::string> validArchs;
-        manifest.configuration(options.configuration).forEachArchitecture(^(const std::string& path) {
-            validArchs.insert(path);
-        });
-
-        if (validArchs.size() != 1) {
-            fprintf(stderr, "MRM doesn't support more than one arch per configuration: %s\n",
-                    options.configuration.c_str());
-            exit(-1);
-        }
-
-        const char* archs[validArchs.size()];
-        uint64_t archIndex = 0;
-        for (const std::string& arch : validArchs) {
-            archs[archIndex++] = arch.c_str();
-        }
-
-        BuildOptions_v1 buildOptions;
-        buildOptions.version                            = 1;
-        buildOptions.updateName                         = manifest.build().c_str();
-        buildOptions.deviceName                         = options.configuration.c_str();
-        buildOptions.disposition                        = Disposition::Unknown;
-        buildOptions.platform                           = (Platform)manifest.platform();
-        buildOptions.archs                              = archs;
-        buildOptions.numArchs                           = validArchs.size();
-        buildOptions.verboseDiagnostics                 = options.debug;
-        buildOptions.isLocallyBuiltCache                = true;
-
-        __block struct SharedCacheBuilder* sharedCacheBuilder = createSharedCacheBuilder(&buildOptions);
-        buildInvocationNode.map["buildOptions"] = getBuildOptionsNode(buildOptions);
-
-        std::set<std::string> requiredBinaries =  {
-            "/usr/lib/libSystem.B.dylib"
-        };
-
-        // Get the file data for every MachO in the BOM.
-        __block dyld3::json::Node filesNode;
-        __block std::vector<std::pair<const void*, size_t>> mappedFiles;
-        manifest.forEachMachO(options.configuration, ^(const std::string &buildPath, const std::string &runtimePath, const std::string &arch, bool shouldBeExcludedIfLeaf) {
-
-            // Filter based on arch as the Manifest adds the file once for each UUID.
-            if (!validArchs.count(arch))
-                return;
-
-            struct stat stat_buf;
-            int fd = ::open(buildPath.c_str(), O_RDONLY, 0);
-            if (fd == -1) {
-                diags.verbose("can't open file '%s', errno=%d\n", buildPath.c_str(), errno);
-                return;
-            }
-
-            if (fstat(fd, &stat_buf) == -1) {
-                diags.verbose("can't stat open file '%s', errno=%d\n", buildPath.c_str(), errno);
-                ::close(fd);
-                return;
-            }
-
-            const void* buffer = mmap(NULL, (size_t)stat_buf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-            if (buffer == MAP_FAILED) {
-                diags.verbose("mmap() for file at %s failed, errno=%d\n", buildPath.c_str(), errno);
-                ::close(fd);
-            }
-            ::close(fd);
-
-            mappedFiles.emplace_back(buffer, (size_t)stat_buf.st_size);
-            FileFlags fileFlags = FileFlags::NoFlags;
-            if (requiredBinaries.count(runtimePath))
-                fileFlags = FileFlags::RequiredClosure;
-            addFile(sharedCacheBuilder, runtimePath.c_str(), (uint8_t*)buffer, (size_t)stat_buf.st_size, fileFlags);
-
-            dyld3::json::Node fileNode;
-            fileNode.map["path"].value  = runtimePath;
-            fileNode.map["flags"].value = fileFlagsToString(fileFlags);
-            filesNode.array.push_back(fileNode);
-        });
-
-        __block dyld3::json::Node symlinksNode;
-        manifest.forEachSymlink(options.configuration, ^(const std::string &fromPath, const std::string &toPath) {
-            addSymlink(sharedCacheBuilder, fromPath.c_str(), toPath.c_str());
-
-            dyld3::json::Node symlinkNode;
-            symlinkNode.map["from-path"].value  = fromPath;
-            symlinkNode.map["to-path"].value    = toPath;
-            symlinksNode.array.push_back(symlinkNode);
-        });
-
-        buildInvocationNode.map["symlinks"] = symlinksNode;
-
-        std::string orderFileData;
-        if (!manifest.dylibOrderFile().empty()) {
-            orderFileData = loadOrderFile(manifest.dylibOrderFile());
-            if (!orderFileData.empty()) {
-                addFile(sharedCacheBuilder, "*order file data*", (uint8_t*)orderFileData.data(), orderFileData.size(), FileFlags::DylibOrderFile);
-                dyld3::json::Node fileNode;
-                fileNode.map["path"].value  = manifest.dylibOrderFile();
-                fileNode.map["flags"].value = fileFlagsToString(FileFlags::DylibOrderFile);
-                filesNode.array.push_back(fileNode);
-            }
-        }
-
-        std::string dirtyDataOrderFileData;
-        if (!manifest.dirtyDataOrderFile().empty()) {
-            dirtyDataOrderFileData = loadOrderFile(manifest.dirtyDataOrderFile());
-            if (!dirtyDataOrderFileData.empty()) {
-                addFile(sharedCacheBuilder, "*dirty data order file data*", (uint8_t*)dirtyDataOrderFileData.data(), dirtyDataOrderFileData.size(), FileFlags::DirtyDataOrderFile);
-                dyld3::json::Node fileNode;
-                fileNode.map["path"].value  = manifest.dirtyDataOrderFile();
-                fileNode.map["flags"].value = fileFlagsToString(FileFlags::DirtyDataOrderFile);
-                filesNode.array.push_back(fileNode);
-            }
-        }
-
-        buildInvocationNode.map["files"] = filesNode;
-
-        if (jsonFile.is_open()) {
-            dyld3::json::printJSON(buildInvocationNode, 0, jsonFile);
-            jsonFile.close();
-        }
-
-        cacheBuildSuccess = runSharedCacheBuilder(sharedCacheBuilder);
-
-        writeMRMResults(cacheBuildSuccess, sharedCacheBuilder, options);
-
-        destroySharedCacheBuilder(sharedCacheBuilder);
-
-        for (auto mappedFile : mappedFiles)
-            ::munmap((void*)mappedFile.first, mappedFile.second);
-    } else {
-        manifest.calculateClosure();
-
-        cacheBuildSuccess = build(diags, manifest, options.dstRoot, false, options.debug, false, false, options.emitDevCaches, true);
-    }
-
-    if (!cacheBuildSuccess) {
-        exit(-1);
-    }
-
-    // Compare this cache to the baseline cache and see if we have any roots to copy over
-    if (!options.baselineDifferenceResultPath.empty() || options.baselineCopyRoots) {
-        std::set<std::string> baselineDylibs = manifest.resultsForConfiguration(options.configuration);
-
-        std::set<std::string> newDylibs;
-        std::map<std::string, std::string> missingDylibReasons;
-        manifest.forEachConfiguration([&manifest, &newDylibs, &missingDylibReasons](const std::string& configName) {
-            for (auto& arch : manifest.configuration(configName).architectures) {
-                for (auto& dylib : arch.second.results.dylibs) {
-                    if (dylib.second.included) {
-                        newDylibs.insert(manifest.installNameForUUID(dylib.first));
-                    } else {
-                        missingDylibReasons[manifest.installNameForUUID(dylib.first)] = dylib.second.exclusionInfo;
-                    }
-                }
-            }
-        });
-
-        // Work out the set of dylibs in the old cache but not the new one
-        std::map<std::string, std::string> dylibsMissingFromNewCache;
-        if (options.baselineCopyRoots || !options.baselineDifferenceResultPath.empty()) {
-            for (const std::string& baselineDylib : baselineDylibs) {
-                if (!newDylibs.count(baselineDylib)) {
-                    auto reasonIt = missingDylibReasons.find(baselineDylib);
-                    if (reasonIt != missingDylibReasons.end())
-                        dylibsMissingFromNewCache[baselineDylib] = reasonIt->second;
-                    else
-                        dylibsMissingFromNewCache[baselineDylib] = "";
-                }
-            }
-
-            if (!dylibsMissingFromNewCache.empty()) {
-                // Work out which dylibs are missing from the new cache, but are not
-                // coming from the -root which already has them on disk
-                std::set<std::string> pathsNotInRoots;
-                for (std::pair<std::string, std::string> dylibMissingFromNewCache : dylibsMissingFromNewCache) {
-                    const std::string& dylibInstallName = dylibMissingFromNewCache.first;
-                    bool foundInRoot = false;
-                    for (auto& root : options.roots) {
-                        struct stat sb;
-                        std::string filePath = root + "/" + dylibInstallName;
-                        if (!stat(filePath.c_str(), &sb)) {
-                            foundInRoot = true;
+                const std::string path = options.dstRoot + "/System/Library/dyld/" + result.loggingPrefix + ".json";
+                std::string pathTemplate = path + "-XXXXXX";
+                size_t templateLen = strlen(pathTemplate.c_str())+2;
+                char pathTemplateSpace[templateLen];
+                strlcpy(pathTemplateSpace, pathTemplate.c_str(), templateLen);
+                int fd = mkstemp(pathTemplateSpace);
+                if ( fd != -1 ) {
+                    ::ftruncate(fd, jsonData.size());
+                    uint64_t writtenSize = write64(fd, jsonData.data(), jsonData.size());
+                    if ( writtenSize == jsonData.size() ) {
+                        ::fchmod(fd, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH); // mkstemp() makes file "rw-------", switch it to "rw-r--r--"
+                        if ( ::rename(pathTemplateSpace, path.c_str()) == 0) {
+                            ::close(fd);
+                            continue; // success
                         }
                     }
-                    if (!foundInRoot)
-                        pathsNotInRoots.insert(dylibInstallName);
-                }
-
-                BOMCopier copier = BOMCopierNewWithSys(BomSys_default());
-                BOMCopierSetUserData(copier, (void*)&pathsNotInRoots);
-                BOMCopierSetCopyFileStartedHandler(copier, filteredCopyIncludingPaths);
-                std::string dylibCacheRootDir = realFilePath(options.dylibCacheDir + "/Root");
-                if (dylibCacheRootDir == "") {
-                    fprintf(stderr, "Could not find dylib Root directory to copy baseline roots from\n");
-                    exit(1);
-                }
-                BOMCopierCopy(copier, dylibCacheRootDir.c_str(), options.dstRoot.c_str());
-                BOMCopierFree(copier);
-
-                for (std::pair<std::string, std::string> dylibMissingFromNewCache : dylibsMissingFromNewCache) {
-                    if (dylibMissingFromNewCache.second.empty())
-                        diags.verbose("Dylib missing from new cache: '%s'\n", dylibMissingFromNewCache.first.c_str());
-                    else
-                        diags.verbose("Dylib missing from new cache: '%s' because '%s'\n",
-                                      dylibMissingFromNewCache.first.c_str(), dylibMissingFromNewCache.second.c_str());
-                }
-            }
-        }
-
-        if (!options.baselineDifferenceResultPath.empty()) {
-            auto cppToObjStr = [](const std::string& str) {
-                return [NSString stringWithUTF8String:str.c_str()];
-            };
-
-            // Work out the set of dylibs in the cache and taken from the -root
-            NSMutableArray<NSString*>* dylibsFromRoots = [NSMutableArray array];
-            for (auto& root : options.roots) {
-                for (const std::string& dylibInstallName : newDylibs) {
-                    struct stat sb;
-                    std::string filePath = root + "/" + dylibInstallName;
-                    if (!stat(filePath.c_str(), &sb)) {
-                        [dylibsFromRoots addObject:cppToObjStr(dylibInstallName)];
+                    else {
+                        fprintf(stderr, "ERROR: could not write file %s\n", pathTemplateSpace);
+                        cacheBuildSuccess = false;
                     }
+                    ::close(fd);
+                    ::unlink(pathTemplateSpace);
+                }
+                else {
+                    fprintf(stderr, "ERROR: could not open file %s\n", pathTemplateSpace);
+                    cacheBuildSuccess = false;
                 }
             }
+        }
 
-            // Work out the set of dylibs in the new cache but not in the baseline cache.
-            NSMutableArray<NSString*>* dylibsMissingFromBaselineCache = [NSMutableArray array];
-            for (const std::string& newDylib : newDylibs) {
-                if (!baselineDylibs.count(newDylib))
-                    [dylibsMissingFromBaselineCache addObject:cppToObjStr(newDylib)];
-            }
-
-            // If a dylib which was cached is no longer eligible, say why
-            NSMutableArray<NSDictionary*>* dylibsReasonsMissingFromNewCache = [NSMutableArray array];
-            for (std::pair<std::string, std::string> dylibMissingFromNewCache : dylibsMissingFromNewCache) {
-                NSMutableDictionary* reasonDict = [[NSMutableDictionary alloc] init];
-                reasonDict[@"path"] = cppToObjStr(dylibMissingFromNewCache.first);
-                reasonDict[@"reason"] = cppToObjStr(dylibMissingFromNewCache.second);
-                [dylibsReasonsMissingFromNewCache addObject:reasonDict];
-            }
-
-            NSMutableDictionary* cacheDict = [[NSMutableDictionary alloc] init];
-            cacheDict[@"root-paths-in-cache"] = dylibsFromRoots;
-            cacheDict[@"device-paths-to-delete"] = dylibsMissingFromBaselineCache;
-            cacheDict[@"baseline-paths-evicted-from-cache"] = dylibsReasonsMissingFromNewCache;
-
-            NSError* error = nil;
-            NSData*  outData = [NSPropertyListSerialization dataWithPropertyList:cacheDict
-                                                                          format:NSPropertyListBinaryFormat_v1_0
-                                                                         options:0
-                                                                           error:&error];
-            (void)[outData writeToFile:cppToObjStr(options.baselineDifferenceResultPath) atomically:YES];
+        // Give up if we couldn't write the cache maps
+        if (!cacheBuildSuccess) {
+            return false;
         }
     }
 
-    if (options.copyRoots) {
-        std::set<std::string> cachePaths;
-        manifest.forEachConfiguration([&manifest, &cachePaths](const std::string& configName) {
-            for (auto& arch : manifest.configuration(configName).architectures) {
-                for (auto& dylib : arch.second.results.dylibs) {
-                    if (dylib.second.included) {
-                        cachePaths.insert(manifest.installNameForUUID(dylib.first));
-                    }
-                }
-            }
-        });
-
-        BOMCopier copier = BOMCopierNewWithSys(BomSys_default());
-        BOMCopierSetUserData(copier, (void*)&cachePaths);
-        BOMCopierSetCopyFileStartedHandler(copier, filteredCopyExcludingPaths);
-        for (auto& root : options.roots) {
-            BOMCopierCopy(copier, root.c_str(), options.dstRoot.c_str());
-        }
-        BOMCopierFree(copier);
-    }
-
-    int err = sync_volume_np(options.dstRoot.c_str(), SYNC_VOLUME_FULLSYNC | SYNC_VOLUME_WAIT);
-    if (err) {
-        fprintf(stderr, "Volume sync failed errnor=%d (%s)\n", err, strerror(err));
-    }
-
-    // Now that all the build commands have been issued lets put a barrier in after then which can tear down the app after
-    // everything is written.
-
-    if (!options.resultPath.empty()) {
-        manifest.write(options.resultPath);
-    }
+    return true;
 }
 
 static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuilderOptions& options,
@@ -927,50 +580,90 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
         diags.error("Build options archs node is not an array\n");
         return;
     }
+    std::set<std::string> jsonArchs;
     const char* archs[archsNode.array.size()];
-    uint64_t archIndex = 0;
+    uint64_t numArchs = 0;
     for (const dyld3::json::Node& archNode : archsNode.array) {
-        archs[archIndex++] = dyld3::json::parseRequiredString(diags, archNode).c_str();
+        const char* archName = dyld3::json::parseRequiredString(diags, archNode).c_str();
+        jsonArchs.insert(archName);
+        if ( options.cmdLineArchs.empty() || options.cmdLineArchs.count(archName) ) {
+            archs[numArchs++] = archName;
+        }
+    }
+
+    // Check that the command line archs are in the JSON list
+    if ( !options.cmdLineArchs.empty() ) {
+        for (const std::string& cmdLineArch : options.cmdLineArchs) {
+            if ( !jsonArchs.count(cmdLineArch) ) {
+                std::string validArchs = "";
+                for (const std::string& jsonArch : jsonArchs) {
+                    if ( !validArchs.empty() ) {
+                        validArchs += ", ";
+                    }
+                    validArchs += jsonArch;
+                }
+                diags.error("Command line -arch '%s' is not valid for this device.  Valid archs are (%s)\n", cmdLineArch.c_str(), validArchs.c_str());
+                return;
+            }
+        }
     }
 
     // Parse the rest of the options node.
-    BuildOptions_v1 buildOptions;
+    BuildOptions_v2 buildOptions;
     buildOptions.version                            = dyld3::json::parseRequiredInt(diags, dyld3::json::getRequiredValue(diags, buildOptionsNode, "version"));
     buildOptions.updateName                         = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, buildOptionsNode, "updateName")).c_str();
     buildOptions.deviceName                         = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, buildOptionsNode, "deviceName")).c_str();
     buildOptions.disposition                        = stringToDisposition(diags, dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, buildOptionsNode, "disposition")));
     buildOptions.platform                           = stringToPlatform(diags, dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, buildOptionsNode, "platform")));
     buildOptions.archs                              = archs;
-    buildOptions.numArchs                           = archsNode.array.size();
+    buildOptions.numArchs                           = numArchs;
     buildOptions.verboseDiagnostics                 = options.debug;
     buildOptions.isLocallyBuiltCache                = true;
 
-    if (diags.hasError())
-        return;
-
-    // Override the disposition if we don't want certaion caches.
-    if (!options.emitDevCaches) {
-        switch (buildOptions.disposition) {
-            case Unknown:
-                // Nothing we can do here as we can't assume what caches are built here.
-                break;
-            case InternalDevelopment:
-                // This builds both caches, but we don't want dev
-                buildOptions.disposition = Customer;
-                break;
-            case Customer:
-                // This is already only the customer cache
-                break;
-            case InternalMinDevelopment:
-                diags.error("Cannot request no dev cache for InternalMinDevelopment as that is already only a dev cache\n");
-                break;
-        }
+    // optimizeForSize was added in version 2
+    buildOptions.optimizeForSize = false;
+    if ( buildOptions.version >= 2 ) {
+        buildOptions.optimizeForSize                = dyld3::json::parseRequiredBool(diags, dyld3::json::getRequiredValue(diags, buildOptionsNode, "optimizeForSize"));
     }
 
     if (diags.hasError())
         return;
 
-    struct SharedCacheBuilder* sharedCacheBuilder = createSharedCacheBuilder(&buildOptions);
+    // Override the disposition if we don't want certaion caches.
+    switch (buildOptions.disposition) {
+        case Unknown:
+            // Nothing we can do here as we can't assume what caches are built here.
+            break;
+        case InternalDevelopment:
+            if (!options.emitDevCaches && !options.emitCustomerCaches) {
+                diags.error("both -no_customer_cache and -no_development_cache passed\n");
+                break;
+            }
+            if (!options.emitDevCaches) {
+                // This builds both caches, but we don't want dev
+                buildOptions.disposition = Customer;
+            }
+            if (!options.emitCustomerCaches) {
+                // This builds both caches, but we don't want customer
+                buildOptions.disposition = InternalMinDevelopment;
+            }
+            break;
+        case Customer:
+            if (!options.emitCustomerCaches) {
+                diags.error("Cannot request no customer cache for Customer as that is already only a customer cache\n");
+            }
+            break;
+        case InternalMinDevelopment:
+            if (!options.emitDevCaches) {
+                diags.error("Cannot request no dev cache for InternalMinDevelopment as that is already only a dev cache\n");
+            }
+            break;
+    }
+
+    if (diags.hasError())
+        return;
+
+    struct MRMSharedCacheBuilder* sharedCacheBuilder = createSharedCacheBuilder((const BuildOptions_v1*)&buildOptions);
 
     // Parse the files
     if (filesNode.array.empty()) {
@@ -979,8 +672,9 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
     }
 
     std::vector<std::tuple<std::string, std::string, FileFlags>> inputFiles;
+    std::set<std::string> dylibsFoundInRoots;
     for (const dyld3::json::Node& fileNode : filesNode.array) {
-        const std::string& path = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, fileNode, "path")).c_str();
+        std::string path = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, fileNode, "path")).c_str();
         FileFlags fileFlags     = stringToFileFlags(diags, dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, fileNode, "flags")));
 
         // We can optionally have a sourcePath entry which is the path to get the source content from instead of the install path
@@ -1000,6 +694,8 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
             sourcePath = path;
         }
 
+        std::string buildPath = sourcePath;
+
         // Check if one of the -root's has this path
         bool foundInOverlay = false;
         for (const std::string& overlay : options.roots) {
@@ -1007,8 +703,9 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
             std::string filePath = overlay + path;
             if (!stat(filePath.c_str(), &sb)) {
                 foundInOverlay = true;
-                diags.verbose("Taking '%s' from overlay instead of dylib cache\n", path.c_str());
+                diags.verbose("Taking '%s' from overlay '%s' instead of dylib cache\n", path.c_str(), overlay.c_str());
                 inputFiles.push_back({ filePath, path, fileFlags });
+                dylibsFoundInRoots.insert(path);
                 break;
             }
         }
@@ -1017,17 +714,15 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
             continue;
 
         // Build paths are relative to the build artifact root directory.
-        std::string buildPath;
         switch (fileFlags) {
             case NoFlags:
             case MustBeInCache:
             case ShouldBeExcludedFromCacheIfUnusedLeaf:
             case RequiredClosure:
-                buildPath = "." + sourcePath;
-                break;
             case DylibOrderFile:
             case DirtyDataOrderFile:
-                buildPath = "." + sourcePath;
+            case ObjCOptimizationsFile:
+                buildPath = "." + buildPath;
                 break;
         }
         inputFiles.push_back({ buildPath, path, fileFlags });
@@ -1036,10 +731,10 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
     if (diags.hasError())
         return;
 
-    // Parse the baseline from the map if we have it
-    std::set<std::string> baselineDylibs;
-    if ( !options.baselineCacheMapPath.empty() ) {
-        dyld3::json::Node mapNode = dyld3::json::readJSON(diags, options.baselineCacheMapPath.c_str());
+    // Parse the baseline from the map(s) if we have it
+    std::set<std::string> unionBaselineDylibs;
+    for (const std::string& baselineCacheMapPath : options.baselineCacheMapPaths) {
+        dyld3::json::Node mapNode = dyld3::json::readJSON(diags, baselineCacheMapPath.c_str());
         if (diags.hasError())
             return;
 
@@ -1077,12 +772,12 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
                 diags.error("Image path node is not a string\n");
                 return;
             }
-            baselineDylibs.insert(pathNode.value);
+            unionBaselineDylibs.insert(pathNode.value);
         }
     }
 
     std::vector<std::pair<const void*, size_t>> mappedFiles;
-    loadMRMFiles(diags, sharedCacheBuilder, inputFiles, mappedFiles, baselineDylibs);
+    loadMRMFiles(diags, sharedCacheBuilder, inputFiles, mappedFiles, unionBaselineDylibs);
 
     if (diags.hasError())
         return;
@@ -1094,7 +789,7 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
             return;
         }
         for (const dyld3::json::Node& symlinkNode : symlinksNode->array) {
-            const std::string& fromPath = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, symlinkNode, "path")).c_str();
+            std::string fromPath = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, symlinkNode, "path")).c_str();
             const std::string& toPath   = dyld3::json::parseRequiredString(diags, dyld3::json::getRequiredValue(diags, symlinkNode, "target")).c_str();
             addSymlink(sharedCacheBuilder, fromPath.c_str(), toPath.c_str());
         }
@@ -1104,34 +799,48 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
         return;
 
     // Don't create a directory if we are skipping writes, which means we have no dstRoot set
-    if (!options.dstRoot.empty())
-        (void)mkpath_np((options.dstRoot + "/System/Library/Caches/com.apple.dyld/").c_str(), 0755);
+    if (!options.dstRoot.empty()) {
+        if ( buildOptions.platform == macOS ) {
+            (void)mkpath_np((options.dstRoot + MACOSX_MRM_DYLD_SHARED_CACHE_DIR).c_str(), 0755);
+        } else {
+            (void)mkpath_np((options.dstRoot + IPHONE_DYLD_SHARED_CACHE_DIR).c_str(), 0755);
+        }
+    }
 
     // Actually build the cache.
     bool cacheBuildSuccess = runSharedCacheBuilder(sharedCacheBuilder);
 
     // Compare this cache to the baseline cache and see if we have any roots to copy over
     if (!options.baselineDifferenceResultPath.empty() || options.baselineCopyRoots) {
-        std::set<std::string> newDylibs;
+        std::set<std::string> dylibsInNewCaches;
+        std::set<std::string> simulatorSupportDylibs;
         if (cacheBuildSuccess) {
             uint64_t fileResultCount = 0;
             if (const char* const* fileResults = getFilesToRemove(sharedCacheBuilder, &fileResultCount)) {
                 for (uint64_t i = 0; i != fileResultCount; ++i)
-                    newDylibs.insert(fileResults[i]);
+                    dylibsInNewCaches.insert(fileResults[i]);
+            }
+            if ( buildOptions.platform == Platform::macOS ) {
+                // macOS has to leave the simulator support binaries on disk
+                // It won't put them in the result of getFilesToRemove() so we need to manually add them
+                simulatorSupportDylibs.insert("/usr/lib/system/libsystem_kernel.dylib");
+                simulatorSupportDylibs.insert("/usr/lib/system/libsystem_platform.dylib");
+                simulatorSupportDylibs.insert("/usr/lib/system/libsystem_pthread.dylib");
             }
         }
 
         if (options.baselineCopyRoots) {
-            // Work out the set of dylibs in the old cache but not the new one
-            std::set<std::string> dylibsMissingFromNewCache;
-            for (const std::string& baselineDylib : baselineDylibs) {
-                if (!newDylibs.count(baselineDylib))
-                    dylibsMissingFromNewCache.insert(baselineDylib);
+            // Work out the set of dylibs in the old caches but not the new ones
+            std::set<std::string> dylibsMissingFromNewCaches;
+            for (const std::string& baselineDylib : unionBaselineDylibs) {
+                if ( !dylibsInNewCaches.count(baselineDylib) && !simulatorSupportDylibs.count(baselineDylib))
+                    dylibsMissingFromNewCaches.insert(baselineDylib);
             }
 
-            if (!dylibsMissingFromNewCache.empty()) {
+            if (!dylibsMissingFromNewCaches.empty()) {
                 BOMCopier copier = BOMCopierNewWithSys(BomSys_default());
-                BOMCopierSetUserData(copier, (void*)&dylibsMissingFromNewCache);
+                FilteredCopyOptions userData = { &diags, &dylibsMissingFromNewCaches, &dylibsFoundInRoots };
+                BOMCopierSetUserData(copier, (void*)&userData);
                 BOMCopierSetCopyFileStartedHandler(copier, filteredCopyIncludingPaths);
                 std::string dylibCacheRootDir = realFilePath(options.dylibCacheDir);
                 if (dylibCacheRootDir == "") {
@@ -1141,7 +850,7 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
                 BOMCopierCopy(copier, dylibCacheRootDir.c_str(), options.dstRoot.c_str());
                 BOMCopierFree(copier);
 
-                for (const std::string& dylibMissingFromNewCache : dylibsMissingFromNewCache) {
+                for (const std::string& dylibMissingFromNewCache : dylibsMissingFromNewCaches) {
                     diags.verbose("Dylib missing from new cache: '%s'\n", dylibMissingFromNewCache.c_str());
                 }
             }
@@ -1155,7 +864,7 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
             // Work out the set of dylibs in the cache and taken from the -root
             NSMutableArray<NSString*>* dylibsFromRoots = [NSMutableArray array];
             for (auto& root : options.roots) {
-                for (const std::string& dylibInstallName : newDylibs) {
+                for (const std::string& dylibInstallName : dylibsInNewCaches) {
                     struct stat sb;
                     std::string filePath = root + "/" + dylibInstallName;
                     if (!stat(filePath.c_str(), &sb)) {
@@ -1166,8 +875,8 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
 
             // Work out the set of dylibs in the new cache but not in the baseline cache.
             NSMutableArray<NSString*>* dylibsMissingFromBaselineCache = [NSMutableArray array];
-            for (const std::string& newDylib : newDylibs) {
-                if (!baselineDylibs.count(newDylib))
+            for (const std::string& newDylib : dylibsInNewCaches) {
+                if (!unionBaselineDylibs.count(newDylib))
                     [dylibsMissingFromBaselineCache addObject:cppToObjStr(newDylib)];
             }
 
@@ -1184,11 +893,15 @@ static void buildCacheFromJSONManifest(Diagnostics& diags, const SharedCacheBuil
         }
     }
 
-    writeMRMResults(cacheBuildSuccess, sharedCacheBuilder, options);
+    bool wroteCaches = writeMRMResults(cacheBuildSuccess, sharedCacheBuilder, options);
 
     destroySharedCacheBuilder(sharedCacheBuilder);
 
     unloadMRMFiles(mappedFiles);
+
+    if (!wroteCaches) {
+        exit(-1);
+    }
 }
 
 int main(int argc, const char* argv[])
@@ -1215,19 +928,26 @@ int main(int argc, const char* argv[])
                         fprintf(stderr, "-root path doesn't exist: %s\n", argv[i]);
                         exit(-1);
                     }
-                    options.roots.insert(realpath);
+                    if ( std::find(options.roots.begin(), options.roots.end(), realpath) == options.roots.end() ) {
+                        // Push roots on to the front so that each -root overrides previous entries
+                        options.roots.push_front(realpath);
+                    }
                 } else if (strcmp(arg, "-copy_roots") == 0) {
                     options.copyRoots = true;
                 } else if (strcmp(arg, "-dylib_cache") == 0) {
                     options.dylibCacheDir = realPath(argv[++i]);
                 } else if (strcmp(arg, "-artifact") == 0) {
                     options.artifactDir = realPath(argv[++i]);
-                } else if (strcmp(arg, "-no_development_cache") == 0) {
-                    options.emitDevCaches = false;
                 } else if (strcmp(arg, "-no_overflow_dylibs") == 0) {
                     options.emitElidedDylibs = false;
+                } else if (strcmp(arg, "-no_development_cache") == 0) {
+                    options.emitDevCaches = false;
                 } else if (strcmp(arg, "-development_cache") == 0) {
                     options.emitDevCaches = true;
+                } else if (strcmp(arg, "-no_customer_cache") == 0) {
+                    options.emitCustomerCaches = false;
+                } else if (strcmp(arg, "-customer_cache") == 0) {
+                    options.emitCustomerCaches = true;
                 } else if (strcmp(arg, "-overflow_dylibs") == 0) {
                     options.emitElidedDylibs = true;
                 } else if (strcmp(arg, "-mrm") == 0) {
@@ -1249,18 +969,25 @@ int main(int argc, const char* argv[])
                 } else if (strcmp(arg, "-baseline_copy_roots") == 0) {
                     options.baselineCopyRoots = true;
                 } else if (strcmp(arg, "-baseline_cache_map") == 0) {
-                    options.baselineCacheMapPath = realPath(argv[++i]);
+                    std::string path = realPath(argv[++i]);
+                    if ( !path.empty() )
+                        options.baselineCacheMapPaths.push_back(path);
+                } else if (strcmp(arg, "-arch") == 0) {
+                    if ( ++i < argc ) {
+                        options.cmdLineArchs.insert(argv[i]);
+                    }
+                    else {
+                        fprintf(stderr, "-arch missing architecture name");
+                        return 1;
+                    }
                 } else {
                     //usage();
                     fprintf(stderr, "unknown option: %s\n", arg);
                     exit(-1);
                 }
             } else {
-                if (!options.configuration.empty()) {
-                    fprintf(stderr, "You may only specify one configuration\n");
-                    exit(-1);
-                }
-                options.configuration = argv[i];
+                fprintf(stderr, "unknown option: %s\n", arg);
+                exit(-1);
             }
         }
         (void)options.emitElidedDylibs; // not implemented yet
@@ -1283,18 +1010,14 @@ int main(int argc, const char* argv[])
             exit(-1);
         }
 
-        if (options.configuration.empty() && jsonManifestPath.empty() && options.buildAllPath.empty()) {
-            fprintf(stderr, "Must specify a configuration OR a -json_manifest path OR a -build_all path\n");
+        if (jsonManifestPath.empty() && options.buildAllPath.empty()) {
+            fprintf(stderr, "Must specify a -json_manifest path OR a -build_all path\n");
             exit(-1);
         }
 
         if (!options.buildAllPath.empty()) {
             if (!options.dstRoot.empty()) {
                 fprintf(stderr, "Cannot combine -dst_root and -build_all\n");
-                exit(-1);
-            }
-            if (!options.configuration.empty()) {
-                fprintf(stderr, "Cannot combine configuration and -build_all\n");
                 exit(-1);
             }
             if (!jsonManifestPath.empty()) {
@@ -1309,7 +1032,7 @@ int main(int argc, const char* argv[])
                 fprintf(stderr, "Cannot combine -baseline_copy_roots and -build_all\n");
                 exit(-1);
             }
-            if (!options.baselineCacheMapPath.empty()) {
+            if (!options.baselineCacheMapPaths.empty()) {
                 fprintf(stderr, "Cannot combine -baseline_cache_map and -build_all\n");
                 exit(-1);
             }
@@ -1319,8 +1042,8 @@ int main(int argc, const char* argv[])
                 exit(-1);
             }
 
-            if (options.configuration.empty() && jsonManifestPath.empty()) {
-                fprintf(stderr, "Must specify a configuration OR -json_manifest path OR -list_configs\n");
+            if (jsonManifestPath.empty()) {
+                fprintf(stderr, "Must specify a -json_manifest path OR -list_configs\n");
                 exit(-1);
             }
         }
@@ -1336,22 +1059,22 @@ int main(int argc, const char* argv[])
                 fprintf(stderr, "Cannot use -results with -json_manifest\n");
                 exit(-1);
             }
-            if (!options.baselineDifferenceResultPath.empty() && options.baselineCacheMapPath.empty()) {
+            if (!options.baselineDifferenceResultPath.empty() && options.baselineCacheMapPaths.empty()) {
                 fprintf(stderr, "Must use -baseline_cache_map with -baseline_diff_results when using -json_manifest\n");
                 exit(-1);
             }
-            if (options.baselineCopyRoots && options.baselineCacheMapPath.empty()) {
+            if (options.baselineCopyRoots && options.baselineCacheMapPaths.empty()) {
                 fprintf(stderr, "Must use -baseline_cache_map with -baseline_copy_roots when using -json_manifest\n");
                 exit(-1);
             }
         } else {
-            if (!options.baselineCacheMapPath.empty()) {
+            if (!options.baselineCacheMapPaths.empty()) {
                 fprintf(stderr, "Cannot use -baseline_cache_map without -json_manifest\n");
                 exit(-1);
             }
         }
 
-        if (!options.baselineCacheMapPath.empty()) {
+        if (!options.baselineCacheMapPaths.empty()) {
             if (options.baselineDifferenceResultPath.empty() && options.baselineCopyRoots) {
                 fprintf(stderr, "Must use -baseline_cache_map with -baseline_diff_results or -baseline_copy_roots\n");
                 exit(-1);
@@ -1465,10 +1188,8 @@ int main(int argc, const char* argv[])
 
                     if (requiresConcurrencyLimit) { dispatch_semaphore_signal(concurrencyLimit); }
                 });
-            } else if (!jsonManifestPath.empty()) {
-                buildCacheFromJSONManifest(diags, options, jsonManifestPath);
             } else {
-                buildCacheFromPListManifest(diags, options);
+                buildCacheFromJSONManifest(diags, options, jsonManifestPath);
             }
 
             const char* args[8];

@@ -1351,7 +1351,8 @@ uintptr_t ImageLoaderMachOClassic::doBindFastLazySymbol(uint32_t lazyBindingInfo
 	throw "compressed LINKEDIT lazy binder called with classic LINKEDIT";
 }
 
-uintptr_t ImageLoaderMachOClassic::doBindLazySymbol(uintptr_t* lazyPointer, const LinkContext& context)
+uintptr_t ImageLoaderMachOClassic::doBindLazySymbol(uintptr_t* lazyPointer, const LinkContext& context,
+													DyldSharedCache::DataConstLazyScopedWriter& patcher)
 {
 	// scan for all lazy-pointer sections
 	const bool twoLevel = this->usesTwoLevelNameSpace();
@@ -1852,7 +1853,7 @@ void ImageLoaderMachOClassic::initializeLazyStubs(const LinkContext& context)
 #endif // __i386__
 
 
-void ImageLoaderMachOClassic::doBind(const LinkContext& context, bool forceLazysBound)
+void ImageLoaderMachOClassic::doBind(const LinkContext& context, bool forceLazysBound, const ImageLoader* reExportParent)
 {
 	CRSetCrashLogMessage2(this->getPath());
 #if __i386__
@@ -1894,7 +1895,7 @@ void ImageLoaderMachOClassic::doBind(const LinkContext& context, bool forceLazys
 	CRSetCrashLogMessage2(NULL);
 }
 
-void ImageLoaderMachOClassic::doBindJustLazies(const LinkContext& context)
+void ImageLoaderMachOClassic::doBindJustLazies(const LinkContext& context, DyldSharedCache::DataConstLazyScopedWriter& patcher)
 {
 	// some API called requested that all lazy pointers in this image be force bound
 	this->bindIndirectSymbolPointers(context, false, true);
