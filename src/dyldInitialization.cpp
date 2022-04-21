@@ -107,7 +107,9 @@ static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
     });
 }
 
-
+#ifdef DARLING
+extern "C" void sigexc_setup(void);
+#endif
 
 //
 //  This is code to bootstrap dyld.  This work in normally done for a program by dyld and crt.
@@ -135,6 +137,9 @@ uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* 
 	// set up random value for stack canary
 	__guard_setup(apple);
 
+#ifdef DARLING
+	sigexc_setup();
+#endif
 #if DYLD_INITIALIZER_SUPPORT
 	// run all C++ initializers inside dyld
 	runDyldInitializers(argc, argv, envp, apple);

@@ -153,7 +153,11 @@ void* calloc(size_t count, size_t size)
 void* realloc(void *ptr, size_t size)
 {
 	void* result = malloc(size);
+#ifdef DARLING
+	if (ptr) { memcpy(result, ptr, size); }
+#else
 	memcpy(result, ptr, size);
+#endif
 	return result;
 }
 
