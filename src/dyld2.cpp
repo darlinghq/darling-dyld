@@ -86,7 +86,7 @@
 
 #endif
 
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
 	enum {
 		AMFI_DYLD_INPUT_PROC_IN_SIMULATOR = (1 << 0),
 	};
@@ -100,6 +100,9 @@
 		AMFI_DYLD_OUTPUT_ALLOW_LIBRARY_INTERPOSING = (1 << 6),
 	};
 	extern "C" int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags);
+#ifdef DARLING
+    int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags) { *output_flags = 0x3F; return 0; }
+#endif
 #else
 	#include <libamfi.h>
 #endif
@@ -1465,7 +1468,7 @@ static void setRunInitialzersOldWay()
 
 static bool sandboxBlocked(const char* path, const char* kind)
 {
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
 	// sandbox calls not yet supported in simulator runtime
 	return false;
 #else
@@ -5314,7 +5317,7 @@ static void configureProcessRestrictions(const macho_header* mainExecutableMH, c
 	uint64_t amfiInputFlags = 0;
 #if TARGET_OS_SIMULATOR
 	amfiInputFlags |= AMFI_DYLD_INPUT_PROC_IN_SIMULATOR;
-#elif TARGET_OS_OSX
+#elif TARGET_OS_OSX && !defined(DARLING)
 	if ( hasRestrictedSegment(mainExecutableMH) )
 		amfiInputFlags |= AMFI_DYLD_INPUT_PROC_HAS_RESTRICT_SEG;
 #elif TARGET_OS_IPHONE
@@ -5454,6 +5457,16 @@ void notifyKernelAboutImage(const struct macho_header* mh, const char* fileInfo)
 
 #if TARGET_OS_OSX
 static void* getProcessInfo() { return dyld::gProcessInfo; }
+#ifdef DARLING
+#undef kdebug_is_enabled
+#undef kdebug_trace
+#undef kdebug_trace_string
+static bool            kdebug_is_enabled(uint32_t code) { return false; }
+static int             kdebug_trace(uint32_t code, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4) { return 0;}
+static uint64_t        kdebug_trace_string(uint32_t debugid, uint64_t str_id, const char *str) { return 0; }
+//int             (*amfi_check_dyld_policy_self)(uint64_t input_flags, uint64_t* output_flags);
+#endif
+
 static const SyscallHelpers sSysCalls = {
 		14,
 		// added in version 1
@@ -6869,8 +6882,10 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 		// First test to see if we forced in dyld2 via a kernel boot-arg
 		if ( dyld3::BootArgs::forceDyld2() ) {
 			sClosureMode = ClosureMode::Off;
+#ifndef DARLING
 		} else if ( inDenyList(sExecPath) ) {
 			sClosureMode = ClosureMode::Off;
+#endif
 		} else if ( sEnv.hasOverride ) {
 			sClosureMode = ClosureMode::Off;
 		} else if ( dyld3::BootArgs::forceDyld3() ) {

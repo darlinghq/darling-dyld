@@ -123,6 +123,12 @@ static NSLinkEditErrors sLastErrorFileCode;
 static int sLastErrorNo;
 #endif
 
+#ifdef DARLING
+extern "C" int mach_driver_get_dyld_fd(void);
+extern "C" void* elfcalls_get_pointer(void);
+extern "C" void mach_driver_set_dyld_fd(int fd);
+#endif
+
 // In 10.3.x and earlier all the NSObjectFileImage API's were implemeneted in libSystem.dylib
 // Beginning in 10.4 the NSObjectFileImage API's are implemented in dyld and libSystem just forwards
 // This conditional keeps support for old libSystem's which needed some help implementing the API's
@@ -253,6 +259,9 @@ static const struct dyld_func dyld_funcs[] = {
     {"__dyld_NSGetSectionDataInObjectFileImage",		(void*)NSGetSectionDataInObjectFileImage },
 #if OLD_LIBSYSTEM_SUPPORT
     {"__dyld_link_module",							(void*)_dyld_link_module },
+#endif
+#ifdef DARLING
+	{"__dyld_get_elfcalls", (void*)elfcalls_get_pointer },
 #endif
 #pragma clang diagnostic pop
 #endif //DEPRECATED_APIS_SUPPORTED

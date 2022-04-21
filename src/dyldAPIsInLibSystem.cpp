@@ -780,6 +780,7 @@ const void* address,
 size_t size, 
 NSObjectFileImage *objectFileImage)
 {
+#ifndef DARLING
     // <rdar://problem/51812762> NSCreatObjectFileImageFromMemory fail opaquely if Hardened runtime is enabled
     uint32_t flags;
     if ( csops(0, CS_OPS_STATUS, &flags, sizeof(flags)) != -1 ) {
@@ -788,6 +789,7 @@ NSObjectFileImage *objectFileImage)
             return NSObjectFileImageAccess;
         }
     }
+#endif
 
 	if ( gUseDyld3 )
 		return dyld3::NSCreateObjectFileImageFromMemory(address, size, objectFileImage);

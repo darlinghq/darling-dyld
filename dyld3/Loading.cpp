@@ -751,7 +751,7 @@ void Loader::registerDOFs(const Array<DOFInfo>& dofs)
 
 bool Loader::dtraceUserProbesEnabled()
 {
-#if !TARGET_OS_SIMULATOR
+#if !TARGET_OS_SIMULATOR && !defined(DARLING)
     uint8_t dofEnabled = *((uint8_t*)_COMM_PAGE_DTRACE_DOF_ENABLED);
     return ( (dofEnabled & 1) );
 #else
