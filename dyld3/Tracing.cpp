@@ -32,6 +32,11 @@
 #include "Loading.h"
 #include "Tracing.h"
 
+#ifdef DARLING
+#define kdebug_trace(...)
+#define kdebug_is_enabled(...) false
+#endif
+
 // Workaround for header issues in rdar://49073930
 // #include <System/os/reason_private.h>
 extern "C" int

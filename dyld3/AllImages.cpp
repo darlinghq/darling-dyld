@@ -61,6 +61,10 @@ extern "C" void __cxa_finalize_ranges(const __cxa_range_t ranges[], unsigned int
 
 extern "C" int  __cxa_atexit(void (*func)(void *), void* arg, void* dso);
 
+#ifdef DARLING
+#define kdebug_is_enabled(...) 0
+#endif
+
 
 VIS_HIDDEN void* __ptrauth_dyld_address_auth gUseDyld3 = nullptr;
 

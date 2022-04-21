@@ -35,6 +35,10 @@
 #include <System/sys/kdebug.h>
 #include <System/sys/reason.h>
 
+#ifdef DARLING
+#define kdebug_trace_string(...) ((uint64_t)-1)
+#endif
+
 
 #define DBG_DYLD_INTERNAL_SUBCLASS              (7)
 #define DBG_DYLD_API_SUBCLASS                   (8)

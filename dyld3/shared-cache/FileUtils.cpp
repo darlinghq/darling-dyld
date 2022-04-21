@@ -38,7 +38,9 @@
 #include <dispatch/dispatch.h>
 #include <mach-o/dyld.h>
 #include <System/sys/csr.h>
+#ifndef DARLING
 #include <rootless.h>
+#endif
 
 #include <string>
 #include <fstream>
@@ -49,6 +51,10 @@
 #include "Diagnostics.h"
 #include "JSONReader.h"
 
+#ifdef DARLING
+static int rootless_check_trusted(const char* path) { return -1; }
+static int rootless_check_trusted_class(const char* path, const char* cls) { return -1; }
+#endif
 
 void iterateDirectoryTree(const std::string& pathPrefix, const std::string& path, bool (^dirFilter)(const std::string& path), void (^fileCallback)(const std::string& path, const struct stat&), bool processFiles, bool recurse)
 {

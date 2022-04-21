@@ -797,6 +797,7 @@ const uint8_t* MachOLoaded::trieWalk(Diagnostics& diag, const uint8_t* start, co
 void MachOLoaded::forEachCDHashOfCodeSignature(const void* codeSigStart, size_t codeSignLen,
                                                void (^callback)(const uint8_t cdHash[20])) const
 {
+#ifndef DARLING
     forEachCodeDirectoryBlob(codeSigStart, codeSignLen, ^(const void *cdBuffer) {
         const CS_CodeDirectory* cd = (const CS_CodeDirectory*)cdBuffer;
         uint32_t cdLength = htonl(cd->length);
@@ -839,6 +840,7 @@ void MachOLoaded::forEachCDHashOfCodeSignature(const void* codeSigStart, size_t 
             return;
         }
     });
+#endif
 }
 
 
