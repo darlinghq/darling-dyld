@@ -6,9 +6,9 @@ SCRIPTDIR=$(pwd -P)
 popd > /dev/null
 
 export SRCROOT="$SCRIPTDIR/.."
-export SDKROOT="$SRCROOT/../../Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+export DSTROOT="$SCRIPTDIR"
+export DERIVED_FILES_DIR="$SCRIPTDIR"
+export SDKROOT="$SRCROOT/../../../Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 
 # copied and modified from dyld.xcodeproj
-${SRCROOT}/bin/expand.rb < "${SRCROOT}/include/mach-o/dyld_priv.h" > "${SRCROOT}/include/mach-o/dyld_priv.h.tmp"
-
-mv "${SRCROOT}/include/mach-o/dyld_priv.h.tmp" "${SRCROOT}/include/mach-o/dyld_priv.h"
+${SRCROOT}/build-scripts/libdyld-generate-version-headers.sh
