@@ -68,7 +68,9 @@ static volatile struct __DATA__dyld  myDyldSection __attribute__ ((section ("__D
 // dylib1.o is used, it overrides this, otherwise this implementation is used.
 __attribute__((weak))
 #endif
+#ifndef DARLING
 __attribute__((visibility("hidden")))
+#endif
 int _dyld_func_lookup(const char* dyld_func_name, void **address)
 {
 	// Cast lookup function here to resign from dyld's 0-discriminator to a real
