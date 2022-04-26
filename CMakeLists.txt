@@ -53,9 +53,11 @@ add_circular(system_dyld FAT
 	dyld3/Loading.cpp
 	dyld3/Logging.cpp
 	dyld3/MachOAnalyzer.cpp
+	dyld3/MachOAnalyzerSet.cpp
 	dyld3/MachOFile.cpp
 	dyld3/MachOLoaded.cpp
 	dyld3/PathOverrides.cpp
+	dyld3/RootsChecker.cpp
 	dyld3/Tracing.cpp
 
 	UPWARD
@@ -97,7 +99,6 @@ add_executable(system_loader
 	src/glue.c
 	src/stub_binding_helper.S
 	src/start_glue.S
-	hell.c
 	dyld3/BootArgs.cpp
 	dyld3/ClosureBuilder.cpp
 	dyld3/Closure.cpp
@@ -112,11 +113,14 @@ add_executable(system_loader
 	dyld3/shared-cache/DyldSharedCache.cpp
 	#dyld3/shared-cache/FileUtils.cpp
 	dyld3/MachOAnalyzer.cpp
+	dyld3/MachOAnalyzerSet.cpp
 	dyld3/MachOFile.cpp
 	dyld3/MachOLoaded.cpp
 	dyld3/PathOverrides.cpp
 	dyld3/SharedCacheRuntime.cpp
-	sandbox-dummy.c
+	dyld3/RootsChecker.cpp
+	darling/src/hell.c
+	darling/src/sandbox-dummy.c
 	version.c # Too make the .exp file work
 )
 
@@ -124,7 +128,7 @@ use_ld64(system_loader)
 dsym(system_loader)
 set_target_properties(system_loader PROPERTIES OUTPUT_NAME "dyld")
 set_property(TARGET system_loader APPEND_STRING PROPERTY
-	COMPILE_FLAGS " -DBUILDING_DYLD=1 -gfull -fPIC -fno-stack-check")
+	COMPILE_FLAGS " -DBUILDING_DYLD=1 -DPRIVATE=1 -gfull -fPIC -fno-stack-check")
 set_property(TARGET system_loader APPEND_STRING PROPERTY LINK_FLAGS " -Wl,-dylinker -Wl,-dead_strip -Wl,-data_const -nostdlib -Wl,-e,__dyld_start -Wl,-fixup_chains -Wl,-image_base,0x1fe00000 -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/dyld.exp")
 target_link_libraries(system_loader libc_static system_blocks_static
 	cxx_static
@@ -149,7 +153,6 @@ install(TARGETS system_dyld DESTINATION libexec/darling/usr/lib/system)
 install(TARGETS system_loader DESTINATION libexec/darling/usr/lib)
 install(FILES
 	doc/man/man1/dyld.1
-	doc/man/man1/update_dyld_shared_cache.1
 	DESTINATION
 	libexec/darling/usr/share/man/man1
 )
