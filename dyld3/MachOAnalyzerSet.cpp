@@ -49,6 +49,10 @@ static bool hasHigh8(uint64_t addend)
     return ( (addend >> 48) != 0xFFFF );
 }
 
+#ifdef DARLING
+MachOAnalyzerSet::MachOAnalyzerSet() {}
+#endif
+
 void MachOAnalyzerSet::WrappedMachO::forEachBind(Diagnostics& diag, FixUpHandler fixUpHandler, CachePatchHandler patchHandler) const
 {
     const bool              is64            = _mh->is64();
