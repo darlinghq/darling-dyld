@@ -107,6 +107,9 @@ namespace dyld3 {
 struct VIS_HIDDEN MachOAnalyzerSet
 {
 public:
+#ifdef DARLING
+    MachOAnalyzerSet();
+#endif
     struct FixupTarget;
 
     struct ExportsTrie { const uint8_t* start; const uint8_t* end; } ;
