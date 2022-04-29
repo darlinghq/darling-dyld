@@ -6796,7 +6796,7 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 		}
 	}
 
-#if !TARGET_OS_SIMULATOR
+#if !TARGET_OS_SIMULATOR && !defined(DARLING)
 	if ( getpid() == 1 ) {
 		// Get the value as set by the boot-args
 		uint64_t commPageValue = 0;

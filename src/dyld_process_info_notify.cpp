@@ -88,12 +88,12 @@ private:
     task_t                          _task;
     mach_port_t                     _port;      // monitor is process being notified of image loading/unloading
     std::atomic<bool>               _connected;
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
     uint32_t                        _portInTarget;
 #endif
 };
 
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
 
 template<typename F>
 kern_return_t withRemotePortArray(task_t target_task, F f) {
@@ -139,7 +139,7 @@ kern_return_t withRemotePortArray(task_t target_task, F f) {
 #endif
 
 kern_return_t dyld_process_info_notify_base::task_dyld_process_info_notify_register(task_t target_task, mach_port_t notify) {
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
     static dispatch_once_t onceToken;
     static kern_return_t (*tdpinr)(task_t, mach_port_t) = nullptr;
     dispatch_once(&onceToken, ^{
@@ -184,7 +184,7 @@ kern_return_t dyld_process_info_notify_base::task_dyld_process_info_notify_regis
 }
 
 kern_return_t dyld_process_info_notify_base::task_dyld_process_info_notify_deregister(task_t target_task, mach_port_t notify) {
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
     static dispatch_once_t onceToken;
     static kern_return_t (*tdpind)(task_t, mach_port_t) = nullptr;
     dispatch_once(&onceToken, ^{
@@ -213,7 +213,7 @@ dyld_process_info_notify_base::dyld_process_info_notify_base(dispatch_queue_t qu
                                                              task_t task, kern_return_t* kr) :
         _retainCount(0), _queue(queue), _notify(Block_copy(notify)), _notifyExit(Block_copy(notifyExit)),
         _notifyMain(nullptr), _machSource(nullptr), _task(task), _port(MACH_PORT_NULL), _connected(false)
-#if TARGET_OS_SIMULATOR
+#if TARGET_OS_SIMULATOR || defined(DARLING)
         , _portInTarget(0)
 #endif
 {
