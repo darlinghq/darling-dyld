@@ -36,7 +36,11 @@
 #include "Tracing.h"
 
 // from libc.a
+#ifdef DARLING
+extern "C" void mach_init(const char* apple[]);
+#else
 extern "C" void mach_init();
+#endif
 extern "C" void __guard_setup(const char* apple[]);
 extern "C" void _subsystem_init(const char* apple[]);
 
@@ -84,7 +88,11 @@ static void runDyldInitializers(int argc, const char* argv[], const char* envp[]
 // On disk, all pointers in dyld's DATA segment are chained together.
 // They need to be fixed up to be real pointers to run.
 //
+#ifdef DARLING
+static void rebaseDyld(const dyld3::MachOLoaded* dyldMH, const char* apple[])
+#else
 static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
+#endif
 {
     // walk all fixups chains and rebase dyld
     const dyld3::MachOAnalyzer* ma = (dyld3::MachOAnalyzer*)dyldMH;
@@ -97,7 +105,11 @@ static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
     diag.assertNoError();
 
     // now that rebasing done, initialize mach/syscall layer
+#ifdef DARLING
+    mach_init(apple);
+#else
     mach_init();
+#endif
 
     // <rdar://47805386> mark __DATA_CONST segment in dyld as read-only (once fixups are done)
     ma->forEachSegment(^(const dyld3::MachOFile::SegmentInfo& info, bool& stop) {
@@ -122,9 +134,11 @@ uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* 
     // Emit kdebug tracepoint to indicate dyld bootstrap has started <rdar://46878536>
     dyld3::kdebug_trace_dyld_marker(DBG_DYLD_TIMING_BOOTSTRAP_START, 0, 0, 0, 0);
 
+#ifndef DARLING
 	// if kernel had to slide dyld, we need to fix up load sensitive locations
 	// we have to do this before using any global variables
     rebaseDyld(dyldsMachHeader);
+#endif
 
 	// kernel sets up env pointer to be just past end of agv array
 	const char** envp = &argv[argc+1];
@@ -133,6 +147,10 @@ uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* 
 	const char** apple = envp;
 	while(*apple != NULL) { ++apple; }
 	++apple;
+
+#ifdef DARLING
+    rebaseDyld(dyldsMachHeader, apple);
+#endif
 
 	// set up random value for stack canary
 	__guard_setup(apple);
