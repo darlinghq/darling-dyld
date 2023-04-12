@@ -6778,6 +6778,11 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 	if ( sJustBuildClosure )
 		sClosureMode = ClosureMode::On;
 
+#ifndef DARLING
+	// While the shared cache code doesn't prevent Darling's libraries
+	// from being loaded, we don't plan on building our libraries 
+	// into a shared cache.
+
 	// load shared cache
 	checkSharedRegionDisable((dyld3::MachOLoaded*)mainExecutableMH, mainExecutableSlide);
 	if ( gLinkContext.sharedRegionMode != ImageLoader::kDontUseSharedRegion ) {
@@ -6795,6 +6800,7 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 																		 (gLinkContext.verboseMapping ? &dyld::log : nullptr));
 		}
 	}
+#endif // !DARLING
 
 #if !TARGET_OS_SIMULATOR && !defined(DARLING)
 	if ( getpid() == 1 ) {
