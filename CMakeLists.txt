@@ -153,6 +153,7 @@ install(TARGETS system_dyld DESTINATION libexec/darling/usr/lib/system)
 install(TARGETS system_loader DESTINATION libexec/darling/usr/lib)
 install(FILES
 	doc/man/man1/dyld.1
+	doc/man/man1/dyld_usage.1
 	DESTINATION
 	libexec/darling/usr/share/man/man1
 )
