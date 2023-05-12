@@ -49,10 +49,7 @@
 #include "FileUtils.h"
 #include "StringUtils.h"
 #include "Diagnostics.h"
-
-#if __MAC_OS_X_VERSION_MIN_REQUIRED < 101200
-extern "C" int rootless_check_trusted_fd(int fd) __attribute__((weak_import));
-#endif
+#include "JSONReader.h"
 
 #ifdef DARLING
 static int rootless_check_trusted(const char* path) { return -1; }
@@ -69,7 +66,7 @@ void iterateDirectoryTree(const std::string& pathPrefix, const std::string& path
     }
     while (dirent* entry = readdir(dir)) {
         struct stat statBuf;
-        std::string dirAndFile = path + "/" + entry->d_name;
+        std::string dirAndFile = path + (path.back() != '/' ? "/" : "") + entry->d_name;
         std::string fullDirAndFile = pathPrefix + dirAndFile;
          switch ( entry->d_type ) {
             case DT_REG:
@@ -140,49 +137,6 @@ const void* mapFileReadOnly(const char* path, size_t& mappedSize)
     }
 
     return nullptr;
-}
-
-static bool sipIsEnabled()
-{
-    static bool             rootlessEnabled;
-    static dispatch_once_t  onceToken;
-    // Check to make sure file system protections are on at all
-    dispatch_once(&onceToken, ^{
-        rootlessEnabled = (csr_check(CSR_ALLOW_UNRESTRICTED_FS) != 0);
-    });
-    return rootlessEnabled;
-}
-
-bool isProtectedBySIP(const std::string& path)
-{
-    if ( !sipIsEnabled() )
-        return false;
-
-    return (rootless_check_trusted(path.c_str()) == 0);
-}
-
-bool isProtectedBySIPExceptDyld(const std::string& path)
-{
-    if ( !sipIsEnabled() )
-        return false;
-
-    return (rootless_check_trusted_class(path.c_str(), "dyld") == 0);
-}
-
-bool isProtectedBySIP(int fd)
-{
-    if ( !sipIsEnabled() )
-        return false;
-
-#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 101200
-    return (rootless_check_trusted_fd(fd) == 0);
-#else
-    // fallback to using rootless_check_trusted
-    char realPath[MAXPATHLEN];
-    if ( fcntl(fd, F_GETPATH, realPath) == 0 )
-        return (rootless_check_trusted(realPath) == 0);
-    return false;
-#endif
 }
 
 bool fileExists(const std::string& path)

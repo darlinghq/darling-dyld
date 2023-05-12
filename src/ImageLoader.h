@@ -51,8 +51,8 @@
 #endif
 
 #include "DyldSharedCache.h"
-
 #include "Map.h"
+#include "PointerAuth.h"
 
 #if __arm__
  #include <mach/vm_page_size.h>
@@ -71,7 +71,7 @@
 #define LOG_BINDINGS 0
 
 
-#if __IPHONE_OS_VERSION_MIN_REQUIRED          
+#if TARGET_OS_IPHONE
 	#define SPLIT_SEG_SHARED_REGION_SUPPORT 0
 	#define SPLIT_SEG_DYLIB_SUPPORT			0
 	#define PREBOUND_IMAGE_SUPPORT			__arm__
@@ -82,7 +82,7 @@
 	#define SUPPORT_CLASSIC_MACHO			__arm__
 	#define SUPPORT_ZERO_COST_EXCEPTIONS	(!__USING_SJLJ_EXCEPTIONS__)
 	#define INITIAL_IMAGE_COUNT				150
-	#define SUPPORT_ACCELERATE_TABLES		!TARGET_OS_SIMULATOR
+	#define SUPPORT_ACCELERATE_TABLES		0
 	#define SUPPORT_ROOT_PATH				TARGET_OS_SIMULATOR
 #else
 	#define SPLIT_SEG_SHARED_REGION_SUPPORT 0
@@ -90,7 +90,7 @@
 	#define PREBOUND_IMAGE_SUPPORT			__i386__
 	#define TEXT_RELOC_SUPPORT				__i386__
 	#define SUPPORT_OLD_CRT_INITIALIZATION	__i386__
-	#define SUPPORT_LC_DYLD_ENVIRONMENT		(__i386__ || __x86_64__)
+	#define SUPPORT_LC_DYLD_ENVIRONMENT		1
 	#define SUPPORT_VERSIONED_PATHS			1
 	#define SUPPORT_CLASSIC_MACHO			1
 	#define SUPPORT_ZERO_COST_EXCEPTIONS	1
@@ -313,13 +313,15 @@ public:
 		bool			allowEnvVarsSharedCache;
 		bool			allowClassicFallbackPaths;
 		bool			allowInsertFailures;
+		bool			allowInterposing;
 		bool			mainExecutableCodeSigned;
 		bool			prebinding;
 		bool			bindFlat;
 		bool			linkingMainExecutable;
 		bool			startedInitializingMainExecutable;
-#if __MAC_OS_X_VERSION_MIN_REQUIRED
+#if TARGET_OS_OSX
 		bool			iOSonMac;
+		// dyld doesn't build for driverKit, so we use the macOS define to control whether driverKit is supported
 		bool			driverKit;
 #endif
 		bool			verboseOpts;
@@ -529,7 +531,8 @@ public:
 	virtual bool						forceFlat() const = 0;
 	
 										// called at runtime when a lazily bound function is first called
-	virtual uintptr_t					doBindLazySymbol(uintptr_t* lazyPointer, const LinkContext& context) = 0;
+	virtual uintptr_t					doBindLazySymbol(uintptr_t* lazyPointer, const LinkContext& context,
+													     DyldSharedCache::DataConstLazyScopedWriter& patcher) = 0;
 	
 										// called at runtime when a fast lazily bound function is first called
 	virtual uintptr_t					doBindFastLazySymbol(uint32_t lazyBindingInfoOffset, const LinkContext& context,
@@ -616,7 +619,7 @@ public:
 										// when resolving symbols look in subImage if symbol can't be found
 	void								reExport(ImageLoader* subImage);
 
-	virtual void						recursiveBind(const LinkContext& context, bool forceLazysBound, bool neverUnload);
+	virtual void						recursiveBind(const LinkContext& context, bool forceLazysBound, bool neverUnload, const ImageLoader* parent);
 	void								recursiveBindWithAccounting(const LinkContext& context, bool forceLazysBound, bool neverUnload);
 	void								recursiveRebaseWithAccounting(const LinkContext& context);
 	void								weakBind(const LinkContext& context);
@@ -646,12 +649,15 @@ public:
 	void								setNeverUnload() { fNeverUnload = true; fLeaveMapped = true; }
 	void								setNeverUnloadRecursive();
 	
+	void								forEachReExportDependent( void (^callback)(const ImageLoader*, bool& stop)) const;
+
 	bool								isReferencedDownward() { return fIsReferencedDownward; }
 
 	virtual void						recursiveMakeDataReadOnly(const LinkContext& context);
 
 	virtual uintptr_t					resolveWeak(const LinkContext& context, const char* symbolName, bool weak_import, bool runResolver,
-													const ImageLoader** foundIn) { return 0; } 
+													const ImageLoader** foundIn,
+													DyldSharedCache::DataConstLazyScopedWriter& patcher) { return 0; } 
 
 										// triggered by DYLD_PRINT_STATISTICS to write info on work done and how fast
 	static void							printStatistics(unsigned int imageCount, const InitializerTimingList& timingInfo);
@@ -695,10 +701,10 @@ public:
 			bool						objCMappedNotified() const { return fObjCMappedNotified; }
 
 	struct InterposeTuple { 
-		uintptr_t		replacement; 
-		ImageLoader*	neverImage;			// don't apply replacement to this image
-		ImageLoader*	onlyImage;			// only apply replacement to this image
-		uintptr_t		replacee; 
+		uintptr_t										replacement;
+		dyld3::AuthenticatedValue<const ImageLoader*>	neverImage;		// don't apply replacement to this image
+		dyld3::AuthenticatedValue<const ImageLoader*>	onlyImage;		// only apply replacement to this image
+		uintptr_t										replacee;
 	};
 
 	static uintptr_t read_uleb128(const uint8_t*& p, const uint8_t* end);
@@ -751,7 +757,8 @@ protected:
 						// To link() an image, its dependent libraries are loaded, it is rebased, bound, and initialized.
 						// These methods do the above, exactly once, and it the right order
 	virtual void		recursiveLoadLibraries(const LinkContext& context, bool preflightOnly, const RPathChain& loaderRPaths, const char* loadPath);
-	virtual unsigned 	recursiveUpdateDepth(unsigned int maxDepth);
+	virtual unsigned 	recursiveUpdateDepth(unsigned int maxDepth, dyld3::Array<ImageLoader*>& danglingUpwards);
+	virtual unsigned 	updateDepth(unsigned int maxDepth);
 	virtual void		recursiveRebase(const LinkContext& context);
 	virtual void		recursiveApplyInterposing(const LinkContext& context);
 	virtual void		recursiveGetDOFSections(const LinkContext& context, std::vector<DOFInfo>& dofs);
@@ -768,10 +775,10 @@ protected:
 	virtual void				doRebase(const LinkContext& context) = 0;
 	
 								// do any symbolic fix ups in this image
-	virtual void				doBind(const LinkContext& context, bool forceLazysBound) = 0;
+	virtual void				doBind(const LinkContext& context, bool forceLazysBound, const ImageLoader* reExportParent) = 0;
 	
 								// called later via API to force all lazy pointer to be bound
-	virtual void				doBindJustLazies(const LinkContext& context) = 0;
+	virtual void				doBindJustLazies(const LinkContext& context, DyldSharedCache::DataConstLazyScopedWriter& patcher) = 0;
 	
 								// if image has any dtrace DOF sections, append them to list to be registered
 	virtual void				doGetDOFSections(const LinkContext& context, std::vector<DOFInfo>& dofs) = 0;
@@ -843,6 +850,9 @@ public:
 protected:
 	static std::vector<InterposeTuple>	fgInterposingTuples;
 	
+#if __x86_64__
+	const char*                 fAotPath;
+#endif
 	const char*					fPath;
 	const char*					fRealPath;
 	dev_t						fDevice;
@@ -898,6 +908,7 @@ private:
 	static_assert(sizeof(sizeOfData) == 8, "Bad data size");
 
 	static uint16_t				fgLoadOrdinal;
+
 };
 
 
