@@ -1127,7 +1127,7 @@ vm_size_t vm_page_size = 0x1000;
 void* _NSConcreteStackBlock[32];
 void* _NSConcreteGlobalBlock[32];
 
-void _Block_object_assign()
+void _Block_object_assign(void* dest, const void* object, const int flags)
 {
 	_ZN4dyld4haltEPKc("_Block_object_assign()");
 }
