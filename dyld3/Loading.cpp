@@ -679,7 +679,8 @@ void Loader::mapImage(Diagnostics& diag, LoadedImage& info, bool fromOFI, bool* 
 
 #endif
 
-#if (__arm__ || __arm64__) && !TARGET_OS_SIMULATOR
+// Darling: It's unlikely we will support fairplay
+#if (__arm__ || __arm64__) && !TARGET_OS_SIMULATOR && !DARLING
     // tell kernel about fairplay encrypted regions
     uint32_t fpTextOffset;
     uint32_t fpSize;
