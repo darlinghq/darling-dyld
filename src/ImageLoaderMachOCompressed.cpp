@@ -2125,7 +2125,8 @@ void ImageLoaderMachOCompressed::updateOptimizedLazyPointers(const LinkContext& 
 
 void ImageLoaderMachOCompressed::registerEncryption(const encryption_info_command* encryptCmd, const LinkContext& context)
 {
-#if (__arm__ || __arm64__) && !TARGET_OS_SIMULATOR
+// Darling: It's unlikely we will support fairplay
+#if (__arm__ || __arm64__) && !TARGET_OS_SIMULATOR && !DARLING
 	if ( encryptCmd == NULL )
 		return;
 	// fMachOData not set up yet, need to manually find mach_header
