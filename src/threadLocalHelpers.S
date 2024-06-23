@@ -228,12 +228,40 @@ LlazyAllocate:
 	.globl _tlv_get_addr
 	.private_extern _tlv_get_addr
 _tlv_get_addr:
+#if DARLING
+// Since "___darling_thread_get_tsd" is a C function, _tlv_get_addr &
+// LlazyAllocate will need to be partically rewritten with this in mind.
+// We will reuse some of logic from "LlazyAllocate" in "_tlv_get_addr"
+	stp		fp, lr, [sp, #-16]!
+	mov		fp, sp
+
+	stp		x1, x2, [sp, #-16]!		// save all registers that C function might trash
+	stp		x3, x4, [sp, #-16]!
+	stp		x5, x6, [sp, #-16]!
+	stp		x7, x8, [sp, #-16]!
+	stp		x9, x10,  [sp, #-16]!
+	stp		x11, x12, [sp, #-16]!
+	stp		x13, x14, [sp, #-16]!
+	str		x15, [sp, #-16]!
+	stp		q0,  q1,  [sp, #-32]!
+	stp		q2,  q3,  [sp, #-32]!
+	stp		q4,  q5,  [sp, #-32]!
+	stp		q6,  q7,  [sp, #-32]!
+#endif
+
 #if __LP64__
 	ldr		x16, [x0, #8]			// get key from descriptor
 #else
 	ldr		w16, [x0, #4]			// get key from descriptor
 #endif
+#if DARLING
+	stp     x0, x16, [sp, #-16]!
+	bl		___darling_thread_get_tsd
+	mov		x17, x0					// Move result to x17
+	ldp     x0, x16, [sp], #16
+#else
 	mrs		x17, TPIDRRO_EL0
+#endif
 	and		x17, x17, #-8			// clear low 3 bits???
 #if __LP64__
 	ldr		x17, [x17, x16, lsl #3]	// get thread allocation address for this key
@@ -247,8 +275,42 @@ _tlv_get_addr:
 	ldr		w16, [x0, #8]			// get offset from descriptor
 #endif
 	add		x0, x17, x16			// return allocation+offset
+#if DARLING
+	b		LReturn
+LlazyAllocate:
+	str		x16, [sp, #-16]!		// save register
+	stp		x0, x17,  [sp, #-16]!	// save descriptor
+	mov		x0, x16					// use key from descriptor as parameter
+	bl		_tlv_allocate_and_initialize_for_key
+	ldp		x16, x17, [sp], #16		// pop descriptor (part 1)
+#if __LP64__
+	ldr		x16, [x16, #16]			// get offset from descriptor
+#else
+	ldr		w16, [x16, #8]			// get offset from descriptor
+#endif
+	add		x0, x0, x16				// return allocation+offset
+	ldr		x16, [sp], #16			// restore register
+LReturn:
+	ldp		q6,  q7,  [sp], #32
+	ldp		q4,  q5,  [sp], #32
+	ldp		q2,  q3,  [sp], #32
+	ldp		q0,  q1,  [sp], #32
+	ldr		x15, [sp], #16
+	ldp		x13, x14, [sp], #16
+	ldp		x11, x12, [sp], #16
+	ldp		x9, x10,  [sp], #16
+	ldp		x7, x8, [sp], #16
+	ldp		x5, x6, [sp], #16
+	ldp		x3, x4, [sp], #16
+	ldp		x1, x2, [sp], #16
+
+	mov		sp, fp
+	ldp		fp, lr, [sp], #16
+#endif
 	ret		lr
 
+
+#if !DARLING
 LlazyAllocate:
 #if __has_feature(ptrauth_returns)
 	pacibsp
@@ -300,6 +362,7 @@ LlazyAllocate:
 #else
 	ret
 #endif
+#endif // #if !DARLING
 
 #endif
 
