@@ -103,6 +103,7 @@
 
 
 // <rdar://problem/13590567> optimize away dyld's initializers
+#ifndef DARLING
 #define VECTOR_NEVER_DESTRUCTED(type) \
 	namespace std { \
 		template <> \
@@ -118,6 +119,18 @@
                template <> \
                __vector_base<type, std::allocator<type> >::~__vector_base() { } \
        }
+#else
+// Apple's original macros specialize the destructor of libc++'s internal
+// std::__vector_base class to be a no-op, avoiding destructor registration
+// for dyld's global vectors.
+//
+// libc++ 15 removed std::__vector_base, so the original macros no longer
+// compile. Since this optimization is non-essential, Darling defines these
+// macros to expand to nothing and uses the normal vector destructors.
+#define VECTOR_NEVER_DESTRUCTED(type)
+#define VECTOR_NEVER_DESTRUCTED_EXTERN(type)
+#define VECTOR_NEVER_DESTRUCTED_IMPL(type)
+#endif
 
 // utilities
 namespace dyld {
