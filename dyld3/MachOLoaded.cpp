@@ -987,6 +987,9 @@ const char* MachOLoaded::ChainedFixupPointerOnDisk::Arm64e::keyName() const
     return keyName(this->authBind.key);
 }
 
+#if !__has_feature(ptrauth_calls) && (defined(__aarch64__) || defined(__arm64__))
+__attribute__((target("arch=armv8.3-a")))
+#endif
 uint64_t MachOLoaded::ChainedFixupPointerOnDisk::Arm64e::signPointer(uint64_t unsignedAddr, void* loc, bool addrDiv, uint16_t diversity, uint8_t key)
 {
     // don't sign NULL
@@ -1008,8 +1011,50 @@ uint64_t MachOLoaded::ChainedFixupPointerOnDisk::Arm64e::signPointer(uint64_t un
             return (uintptr_t)__builtin_ptrauth_sign_unauthenticated((void*)unsignedAddr, 3, extendedDiscriminator);
     }
     assert(0 && "invalid signing key");
+#elif defined(__aarch64__) || defined(__arm64__)
+    // DARLING arm64e compat: built with plain arm64 toolchain (no ptrauth_calls), but
+    // PAC-capable Linux ARM64 hosts (paca/pacg cpuinfo) support the PAC instructions
+    // natively. Emit PACIA/PACIB/PACDA/PACDB via inline asm so we produce real signed
+    // pointers; arm64e BRAA/BRAB/BLRAA call sites then verify successfully.
+    //
+    // Modifier: PAC instructions take the modifier in a register. When addrDiv is
+    // set, Darwin's `__builtin_ptrauth_blend_discriminator(p, d)` combines `loc`
+    // and the 16-bit `diversity` by placing `d` in the HIGH 16 bits (bits 48..63)
+    // of `p`, keeping `p`'s low 48 bits intact:
+    //     blend(p, d) = (p & 0x0000_FFFF_FFFF_FFFF) | (d << 48)
+    // Cross-checked with Apple's compiler-generated arm64e auth_stubs: a stub for
+    // a GOT slot at 0x100004008 has `add x17, x17, #0x8 ; braa x16, x17`, so the
+    // modifier at BRAA time is the **full** GOT slot address (0x100004008).
+    // The earlier formula `(loc & ~0xFFFF) | d` (low-16 blend) produced
+    // 0x100000000, which mismatched BRAA's 0x100004008 and made every auth-bind
+    // SIGILL on first use.
+    uint64_t mod = diversity;
+    if ( addrDiv )
+        mod = ((uintptr_t)loc & 0x0000FFFFFFFFFFFFULL) | (((uint64_t)diversity & 0xFFFF) << 48);
+    // Use raw .inst encoding because the assembler in our toolchain rejects
+    // pacia/pacib/pacda/pacdb without arm64e-specific feature flags. Fix the
+    // dest register to x0 and modifier to x1 via named-register asm operands.
+    //
+    // ARMv8.3 PAC encoding (Xd in low 5 bits, Xn in bits 5-9):
+    //   PACIA Xd, Xn -> 0xDAC10000 | (Xn<<5) | Xd
+    //   PACIB Xd, Xn -> 0xDAC10400 | (Xn<<5) | Xd
+    //   PACDA Xd, Xn -> 0xDAC10800 | (Xn<<5) | Xd
+    //   PACDB Xd, Xn -> 0xDAC10C00 | (Xn<<5) | Xd
+    // With Xd=x0 (=0) and Xn=x1 (=1), Xn<<5 = 32 = 0x20:
+    //   PACIA x0,x1 = 0xDAC10020   PACIB x0,x1 = 0xDAC10420
+    //   PACDA x0,x1 = 0xDAC10820   PACDB x0,x1 = 0xDAC10C20
+    register uint64_t r0 __asm__("x0") = unsignedAddr;
+    register uint64_t r1 __asm__("x1") = mod;
+    switch ( key ) {
+        case 0: __asm__(".inst 0xDAC10020" : "+r"(r0) : "r"(r1)); return r0;
+        case 1: __asm__(".inst 0xDAC10420" : "+r"(r0) : "r"(r1)); return r0;
+        case 2: __asm__(".inst 0xDAC10820" : "+r"(r0) : "r"(r1)); return r0;
+        case 3: __asm__(".inst 0xDAC10C20" : "+r"(r0) : "r"(r1)); return r0;
+    }
+    return unsignedAddr;
 #else
-    assert(0 && "arm64e signing only arm64e");
+    (void)loc; (void)addrDiv; (void)diversity; (void)key;
+    return unsignedAddr;
 #endif
 }
 
@@ -1178,7 +1223,12 @@ void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_st
         void* newValue;
         switch (segInfo->pointer_format) {
 #if __LP64__
-  #if  __has_feature(ptrauth_calls)
+  // DARLING arm64e compat: arm64e fixup cases were originally gated on
+  // __has_feature(ptrauth_calls) — only true under Apple-Clang arm64e target.
+  // When dyld is built with a standard arm64 toolchain (our case), the gate
+  // dropped these cases entirely, causing "unsupported pointer chain format"
+  // for every arm64e binary. We unconditionally include them and rely on
+  // signPointer() falling back to a plain-pointer return below.
            case DYLD_CHAINED_PTR_ARM64E:
            case DYLD_CHAINED_PTR_ARM64E_KERNEL:
            case DYLD_CHAINED_PTR_ARM64E_USERLAND:
@@ -1228,7 +1278,6 @@ void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_st
                     logFixup(fixupLoc, newValue);
                 fixupLoc->raw64 = (uintptr_t)newValue;
                 break;
-  #endif
             case DYLD_CHAINED_PTR_64:
             case DYLD_CHAINED_PTR_64_OFFSET:
                 if ( fixupLoc->generic64.bind.bind ) {
