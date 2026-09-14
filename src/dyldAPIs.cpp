@@ -127,6 +127,10 @@ static int sLastErrorNo;
 extern "C" int mach_driver_get_dyld_fd(void);
 extern "C" void* elfcalls_get_pointer(void);
 extern "C" void mach_driver_set_dyld_fd(int fd);
+#if __arm64__
+// dyld's own (static) copy of libsystem_kernel's TSD lookup; see "__dyld_get_tsd_base" below.
+extern "C" void* sys_thread_get_tsd_base(void);
+#endif
 #endif
 
 // In 10.3.x and earlier all the NSObjectFileImage API's were implemeneted in libSystem.dylib
@@ -262,6 +266,12 @@ static const struct dyld_func dyld_funcs[] = {
 #endif
 #ifdef DARLING
 	{"__dyld_get_elfcalls", (void*)elfcalls_get_pointer },
+	// On arm64 the Darwin TSD base lives in a table inside libsystem_kernel, and dyld links its own static
+	// copy of that table. dyld registers the main thread there (_pthread_set_self_dyld); libsystem_kernel.dylib
+	// uses this to register the same base in its table.
+#if __arm64__
+	{"__dyld_get_tsd_base", (void*)sys_thread_get_tsd_base },
+#endif
 #endif
 #pragma clang diagnostic pop
 #endif //DEPRECATED_APIS_SUPPORTED
