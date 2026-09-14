@@ -233,6 +233,12 @@ _tlv_get_addr:
 #else
 	ldr		w16, [x0, #4]			// get key from descriptor
 #endif
+#if defined(DARLING)
+	// DARLING: Linux keeps TPIDRRO_EL0 at zero for user space, and Darwin's TSD base lives in a
+	// table reached through sys_thread_get_tsd_base() instead. Always take the C path, which saves
+	// every register and looks up (or allocates) this thread's storage for the key.
+	b		LlazyAllocate
+#endif
 	mrs		x17, TPIDRRO_EL0
 	and		x17, x17, #-8			// clear low 3 bits???
 #if __LP64__
@@ -271,7 +277,11 @@ LlazyAllocate:
 	stp		x0, x17,  [sp, #-16]!	// save descriptor
 
 	mov		x0, x16					// use key from descriptor as parameter
+#if defined(DARLING)
+	bl		_tlv_get_or_allocate_for_key
+#else
 	bl		_tlv_allocate_and_initialize_for_key
+#endif
 	ldp		x16, x17, [sp], #16		// pop descriptor
 #if __LP64__
 	ldr		x16, [x16, #16]			// get offset from descriptor
