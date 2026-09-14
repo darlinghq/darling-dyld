@@ -2992,6 +2992,10 @@ static const cpu_subtype_t kARM[kARM_RowCount][9] = {
 	#else
 		// arm64 main binary
 		static const cpu_subtype_t kARM64[] = { CPU_SUBTYPE_ARM64_V8, CPU_SUBTYPE_ARM64_ALL, CPU_SUBTYPE_END_OF_LIST };
+	#if defined(DARLING)
+		// DARLING arm64e compat: arm64e main binary, prefer arm64e slices but accept arm64 ones (Darling's own libraries)
+		static const cpu_subtype_t kARM64eDarling[] = { CPU_SUBTYPE_ARM64E, CPU_SUBTYPE_ARM64_V8, CPU_SUBTYPE_ARM64_ALL, CPU_SUBTYPE_END_OF_LIST };
+	#endif
 	#endif // __arm64e__
 #endif
 
@@ -3031,6 +3035,12 @@ static const cpu_subtype_t* findCPUSubtypeList(cpu_type_t cpu, cpu_subtype_t sub
 		#if __arm64e__
 			return ( sKeysDisabled ? kARM64eKeysOff : kARM64e);
 		#else
+		#if defined(DARLING)
+			// DARLING arm64e compat: this dyld is built for plain arm64 but also runs arm64e programs, which
+			// need the arm64e slice of universal libraries (e.g. the Swift runtime) to authenticate their pointers.
+			if ( (sMainExecutableMachHeader != NULL) && ((sMainExecutableMachHeader->cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E) )
+				return kARM64eDarling;
+		#endif
 			return kARM64;
 		#endif
 			break;
