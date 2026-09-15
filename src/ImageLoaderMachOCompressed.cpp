@@ -1209,7 +1209,7 @@ struct ThreadedBindData {
     uint8_t type               = 0;
 };
 
-void ImageLoaderMachOCompressed::makeDataReadOnly() const
+void ImageLoaderMachOCompressed::setReadOnlyDataWritable(bool writable) const
 {
 #if !TEXT_RELOC_SUPPORT
 	if ( fReadOnlyDataSegment && !this->ImageLoader::inSharedCache() ) {
@@ -1224,7 +1224,7 @@ void ImageLoaderMachOCompressed::makeDataReadOnly() const
 						continue;
 				}
 	#endif
-				::mprotect((void*)start, size, PROT_READ);
+				::mprotect((void*)start, size, writable ? (PROT_READ | PROT_WRITE) : PROT_READ);
 				//dyld::log("make read-only 0x%09lX -> 0x%09lX\n", (long)start, (long)(start+size));
 			}
 		}

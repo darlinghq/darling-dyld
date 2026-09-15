@@ -933,7 +933,7 @@ void ImageLoader::recursiveMakeDataReadOnly(const LinkContext& context)
 			}
 
 			// if this image has __DATA_CONST, make that segment read-only
-			makeDataReadOnly();
+			setReadOnlyDataWritable(false);
 		}
 		catch (const char* msg) {
 			fMadeReadOnly = false;
