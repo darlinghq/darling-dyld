@@ -210,7 +210,7 @@ void* tlv_allocate_and_initialize_for_key(pthread_key_t key)
 	return buffer;
 }
 
-#if defined(DARLING) && __arm64__
+#if __arm64__
 // Called from tlv_get_addr on every access: returns this thread's storage for the key,
 // allocating and initializing it on first use.
 __attribute__((visibility("hidden")))

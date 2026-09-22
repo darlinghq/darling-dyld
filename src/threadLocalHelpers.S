@@ -233,27 +233,12 @@ _tlv_get_addr:
 #else
 	ldr		w16, [x0, #4]			// get key from descriptor
 #endif
-#if defined(DARLING)
-	// DARLING: Linux keeps TPIDRRO_EL0 at zero for user space, and Darwin's TSD base lives in a
-	// table reached through sys_thread_get_tsd_base() instead. Always take the C path, which saves
-	// every register and looks up (or allocates) this thread's storage for the key.
+	// DARLING: Linux and Android keep TPIDRRO_EL0 at zero for user space.
+	// Darwin's TSD base lives in Darling's per-thread storage reached through
+	// sys_thread_get_tsd_base(). Always take the C path (_tlv_get_or_allocate_for_key),
+	// which preserves every caller register and correctly resolves the TLV address.
 	b		LlazyAllocate
-#endif
-	mrs		x17, TPIDRRO_EL0
-	and		x17, x17, #-8			// clear low 3 bits???
-#if __LP64__
-	ldr		x17, [x17, x16, lsl #3]	// get thread allocation address for this key
-#else
-	ldr		w17, [x17, x16, lsl #2]	// get thread allocation address for this key
-#endif
-	cbz		x17, LlazyAllocate		// if NULL, lazily allocate
-#if __LP64__
-	ldr		x16, [x0, #16]			// get offset from descriptor
-#else
-	ldr		w16, [x0, #8]			// get offset from descriptor
-#endif
-	add		x0, x17, x16			// return allocation+offset
-	ret		lr
+
 
 LlazyAllocate:
 #if __has_feature(ptrauth_returns)
