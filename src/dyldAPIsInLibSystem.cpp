@@ -2284,6 +2284,15 @@ const char* _dyld_get_objc_selector(const char* selName)
     return nullptr;
 }
 
+// This dyld2 loader does not allocate a separate protected dyld stack.
+extern "C" void _dyld_stack_range(const void** stackBottom, const void** stackTop)
+{
+    if (stackBottom != nullptr)
+        *stackBottom = nullptr;
+    if (stackTop != nullptr)
+        *stackTop = nullptr;
+}
+
 void _dyld_for_each_objc_class(const char* className,
                            void (^callback)(void* classPtr, bool isLoaded, bool* stop)) {
     if ( gUseDyld3 )
