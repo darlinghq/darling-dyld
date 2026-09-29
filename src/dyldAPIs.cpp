@@ -149,6 +149,7 @@ static int sLastErrorNo;
 #ifdef DARLING
 extern "C" int mach_driver_get_dyld_fd(void);
 extern "C" void* elfcalls_get_pointer(void);
+extern "C" size_t elfcalls_get_size(void);
 extern "C" void mach_driver_set_dyld_fd(int fd);
 #if __arm64__
 // dyld's own (static) copy of libsystem_kernel's TSD lookup; see "__dyld_get_tsd_base" below.
@@ -291,6 +292,7 @@ static const struct dyld_func dyld_funcs[] = {
 #endif
 #ifdef DARLING
 	{"__dyld_get_elfcalls", (void*)elfcalls_get_pointer },
+	{"__dyld_get_elfcalls_size", (void*)elfcalls_get_size },
 	// On arm64 the Darwin TSD base lives in a table inside libsystem_kernel, and dyld links its own static
 	// copy of that table. dyld registers the main thread there (_pthread_set_self_dyld); libsystem_kernel.dylib
 	// uses this to register the same base in its table.
