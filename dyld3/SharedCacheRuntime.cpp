@@ -849,6 +849,38 @@ static bool mapCacheSystemWide(const SharedCacheOptions& options, SharedCacheLoa
 }
 #endif // TARGET_OS_SIMULATOR
 
+#if defined(DARLING)
+// Reserve with a hint, never MAP_FIXED: a collision must not replace live code.
+// Once acquired, the file mappings may safely replace our own reservation.
+class DarlingCacheReservation {
+    void* address = MAP_FAILED;
+    size_t size = 0;
+public:
+    bool acquire(uint64_t start, uint64_t length) {
+        if ( start == 0 || length == 0 || start > UINTPTR_MAX
+          || length > SIZE_MAX || length > UINTPTR_MAX - start )
+            return false;
+        void* requested = (void*)(uintptr_t)start;
+        void* mapped = ::mmap(requested, (size_t)length, PROT_NONE,
+                              MAP_PRIVATE | MAP_ANON, -1, 0);
+        if ( mapped == MAP_FAILED )
+            return false;
+        if ( mapped != requested ) {
+            ::munmap(mapped, (size_t)length);
+            return false;
+        }
+        address = mapped;
+        size = (size_t)length;
+        return true;
+    }
+    void keep() { address = MAP_FAILED; }
+    ~DarlingCacheReservation() {
+        if ( address != MAP_FAILED )
+            ::munmap(address, size);
+    }
+};
+#endif
+
 static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadInfo* results)
 {
     // open and validate cache file
@@ -871,10 +903,34 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
 
     results->loadAddress = (const DyldSharedCache*)(info.mappings[0].sms_address);
 
+#if defined(DARLING)
+    // Linux-backed Darling has no replaceable system-wide shared region.
+    // Validate the complete destination span before any destructive mappings.
+    const uint64_t slide = (uint32_t)results->slide;
+    const uint64_t start = info.sharedRegionStart;
+    const uint64_t length = info.sharedRegionSize;
+    bool valid = start <= UINT64_MAX - slide;
+    const uint64_t destination = valid ? start + slide : 0;
+    valid = valid && length != 0 && length <= UINT64_MAX - destination;
+    for (uint32_t i = 0; valid && i < info.mappingsCount; ++i) {
+        const uint64_t address = info.mappings[i].sms_address;
+        const uint64_t size = info.mappings[i].sms_size;
+        valid = address >= destination && address - destination <= length
+             && size <= length - (address - destination);
+    }
+    DarlingCacheReservation reservation;
+    if ( !valid || !reservation.acquire(destination, length) ) {
+        results->loadAddress = nullptr;
+        results->errorMessage = "could not reserve unoccupied private shared cache region";
+        ::close(info.fd);
+        return false;
+    }
+#else
     // deallocate any existing system wide shared cache
     deallocateExistingSharedCache();
+#endif
 
-#if TARGET_OS_SIMULATOR && TARGET_OS_WATCH
+#if TARGET_OS_SIMULATOR && TARGET_OS_WATCH && !defined(DARLING)
     // <rdar://problem/50887685> watchOS 32-bit cache does not overlap macOS dyld cache address range
     // mmap() of a file needs a vm_allocation behind it, so make one
     vm_address_t loadAddress = 0x40000000;
@@ -897,7 +953,9 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
         if ( ::mmap(mmapAddress, size, protection, MAP_FIXED | MAP_PRIVATE, info.fd, offset) != mmapAddress ) {
             // failed to map some chunk of this shared cache file
             // clear shared region
+#if !defined(DARLING)
             ::mmap((void*)((long)SHARED_REGION_BASE), SHARED_REGION_SIZE, PROT_NONE, MAP_FIXED | MAP_PRIVATE| MAP_ANON, 0, 0);
+#endif
             // return failure
             results->loadAddress        = nullptr;
             results->errorMessage       = "could not mmap() part of dyld cache";
@@ -908,6 +966,9 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
     ::close(info.fd);
 
 #if TARGET_OS_SIMULATOR // simulator caches do not support sliding
+#if defined(DARLING)
+    reservation.keep();
+#endif
     return true;
 #else
 
@@ -927,6 +988,12 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
         dyld::log("mapped dyld cache file private to process (%s):\n", results->path);
         verboseSharedCacheMappings(info.mappings, info.mappingsCount);
     }
+#if defined(DARLING)
+    if ( success )
+        reservation.keep();
+    else
+        results->loadAddress = nullptr;
+#endif
     return success;
 #endif
 }
