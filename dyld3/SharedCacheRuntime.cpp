@@ -479,6 +479,19 @@ static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoa
         return false;
     }
 
+    // Use the same format discriminator as the slide-table consumer below.
+    // A modern header with zero entries must not bypass this validation.
+    if ( cache->header.mappingOffset > __offsetof(dyld_cache_header, mappingWithSlideOffset) ) {
+        if ( (cache->header.mappingWithSlideCount != cache->header.mappingCount)
+          || (cache->header.mappingWithSlideOffset % alignof(dyld_cache_mapping_and_slide_info) != 0)
+          || !cacheRangeContains(0, sizeof(firstPage), cache->header.mappingWithSlideOffset,
+                                  uint64_t(cache->header.mappingWithSlideCount) * sizeof(dyld_cache_mapping_and_slide_info)) ) {
+            results->errorMessage = "shared cache slide mappings are invalid";
+            ::close(fd);
+            return false;
+        }
+    }
+
     // register code signature of cache file
     fsignatures_t siginfo;
     siginfo.fs_file_start = 0;  // cache always starts at beginning of file
@@ -556,8 +569,21 @@ static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoa
         info->mappings[i].sms_max_prot              = fileMappings[i].maxProt;
         info->mappings[i].sms_init_prot             = initProt;
         if ( slideInfoFileSize != 0 ) {
-            uint64_t offsetInLinkEditRegion = (slideInfoFileOffset - linkeditMapping->fileOffset);
-            info->mappings[i].sms_slide_start   = (user_addr_t)(linkeditMapping->address + offsetInLinkEditRegion);
+            const dyld_cache_mapping_info* slideMapping = nullptr;
+            for (uint32_t j = 0; j != cache->header.mappingCount; ++j) {
+                if ( cacheRangeContains(fileMappings[j].fileOffset, fileMappings[j].size,
+                                        slideInfoFileOffset, slideInfoFileSize) ) {
+                    slideMapping = &fileMappings[j];
+                    break;
+                }
+            }
+            if ( slideMapping == nullptr ) {
+                results->errorMessage = "shared cache slide info lies outside mappings";
+                ::close(fd);
+                return false;
+            }
+            uint64_t offsetInSlideRegion = slideInfoFileOffset - slideMapping->fileOffset;
+            info->mappings[i].sms_slide_start   = (user_addr_t)(slideMapping->address + offsetInSlideRegion);
             info->mappings[i].sms_slide_size    = (user_addr_t)slideInfoFileSize;
             info->mappings[i].sms_init_prot    |= (VM_PROT_SLIDE | authProt);
             info->mappings[i].sms_max_prot     |= (VM_PROT_SLIDE | authProt);
