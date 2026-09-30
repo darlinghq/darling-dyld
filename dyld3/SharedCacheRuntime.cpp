@@ -487,6 +487,7 @@ static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoa
     }
     if ( memcmp(mappedData, firstPage, sizeof(firstPage)) != 0 ) {
         results->errorMessage = "first page of mmap()ed shared cache not valid";
+        ::munmap(mappedData, sizeof(firstPage));
         ::close(fd);
         return false;
     }
@@ -1015,4 +1016,3 @@ void deallocateExistingSharedCache()
 }
 
 } // namespace dyld3
-
