@@ -35,6 +35,7 @@
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
 #include <sys/mman.h>
+#include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
@@ -906,6 +907,112 @@ public:
 };
 #endif
 
+#if defined(DARLING) && defined(__arm64__)
+extern "C" unsigned long sys_thread_get_native_tsd_slot_offset(void);
+
+class DarlingTSDReadVeneers {
+    uint32_t* memory = nullptr;
+    size_t used = 0;
+    unsigned long slot = 0;
+    bool committed = false;
+    static const size_t capacity = 1024 * 1024;
+    static bool branch(uintptr_t from, uintptr_t to, uint32_t& encoded) {
+        int64_t delta = (int64_t)to - (int64_t)from;
+        if ((delta & 3) || delta < -(1LL << 27) || delta >= (1LL << 27))
+            return false;
+        encoded = 0x14000000U | ((uint32_t)(delta >> 2) & 0x03FFFFFFU);
+        return true;
+    }
+public:
+    DarlingTSDReadVeneers(uintptr_t cacheStart, unsigned long offset) : slot(offset) {
+        if (offset < 16 || offset > 32760 || (offset & 7) || cacheStart <= capacity)
+            return;
+        void* desired = (void*)(cacheStart - capacity);
+        void* mapped = ::mmap(desired, capacity, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (mapped != desired) {
+            if (mapped != MAP_FAILED) ::munmap(mapped, capacity);
+            return;
+        }
+        memory = (uint32_t*)mapped;
+    }
+    ~DarlingTSDReadVeneers() {
+        if (memory && !committed) ::munmap(memory, capacity);
+    }
+    uint32_t translate(uint32_t reg, uintptr_t original) {
+        if (reg == 31) return 0xD503201FU; // MRS XZR has no observable result
+        uint32_t entryBranch, returnBranch;
+        if (!memory || used + 20 > capacity
+            || !branch(original, (uintptr_t)memory + used, entryBranch)
+            || !branch((uintptr_t)memory + used + 16, original + 4, returnBranch))
+            return 0x0000DA00U | reg;
+        uint32_t* code = (uint32_t*)((uintptr_t)memory + used);
+        code[0] = 0xD53BD040U | reg; // mrs Xd, TPIDR_EL0
+        code[1] = 0xF9400000U | ((uint32_t)(slot / 8) << 10) | (reg << 5) | reg;
+        code[2] = 0xB5000040U | reg; // cbnz Xd, +8 (preserves NZCV)
+        code[3] = 0x0000DA00U | reg; // uninitialized slot: existing TSD trap
+        code[4] = returnBranch;
+        used += 20;
+        return entryBranch;
+    }
+    size_t count() const { return used / 20; }
+    bool finish() {
+        if (memory) {
+            sys_icache_invalidate(memory, used);
+            if (::mprotect(memory, capacity, PROT_READ | PROT_EXEC) != 0)
+                return false;
+        }
+        committed = true;
+        return true;
+    }
+};
+
+static bool translateDarlingCacheTSD(const CacheInfo& info, const char** errorMessage)
+{
+    DarlingTSDReadVeneers veneers(info.mappings[0].sms_address,
+                                 sys_thread_get_native_tsd_slot_offset());
+    for (uint32_t i = 0; i < info.mappingsCount; ++i) {
+        const auto& mapping = info.mappings[i];
+        if (!(mapping.sms_init_prot & VM_PROT_EXECUTE))
+            continue;
+        void* start = (void*)(uintptr_t)mapping.sms_address;
+        size_t size = (size_t)mapping.sms_size;
+        if (::mprotect(start, size, PROT_READ | PROT_WRITE) != 0) {
+            *errorMessage = "could not make private cache text writable for TSD translation";
+            return false;
+        }
+        uint32_t* instruction = (uint32_t*)start;
+        uint32_t* end = instruction + size / sizeof(uint32_t);
+        bool changed = false;
+        for (; instruction != end; ++instruction) {
+            if ((*instruction & 0xFFFFFFE0U) != 0xD53BD060U)
+                continue;
+            const uint32_t reg = *instruction & 0x1FU;
+            const uint32_t cpuIndexShift = 0xD34CFC00U | (reg << 5) | reg;
+            // Darwin's allocator CPU-index read is not a TSD pointer read.
+            if ((instruction + 1 != end) && instruction[1] == cpuIndexShift)
+                *instruction = 0xAA1F03E0U | reg; // mov Xd, XZR
+            else
+                *instruction = veneers.translate(reg, (uintptr_t)instruction);
+            changed = true;
+        }
+        if (changed)
+            sys_icache_invalidate(start, size);
+        int protection = PROT_EXEC;
+        if (mapping.sms_init_prot & VM_PROT_READ) protection |= PROT_READ;
+        if (mapping.sms_init_prot & VM_PROT_WRITE) protection |= PROT_WRITE;
+        if (::mprotect(start, size, protection) != 0) {
+            *errorMessage = "could not restore private cache text protections";
+            return false;
+        }
+    }
+    if (!veneers.finish()) {
+        *errorMessage = "could not protect private cache TSD veneers";
+        return false;
+    }
+    return true;
+}
+#endif
+
 static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadInfo* results)
 {
     // open and validate cache file
@@ -991,6 +1098,12 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
     ::close(info.fd);
 
 #if TARGET_OS_SIMULATOR // simulator caches do not support sliding
+#if defined(DARLING) && defined(__arm64__)
+    if (!translateDarlingCacheTSD(info, &results->errorMessage)) {
+        results->loadAddress = nullptr;
+        return false;
+    }
+#endif
 #if defined(DARLING)
     reservation.keep();
 #endif
@@ -1013,6 +1126,10 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
         dyld::log("mapped dyld cache file private to process (%s):\n", results->path);
         verboseSharedCacheMappings(info.mappings, info.mappingsCount);
     }
+#if defined(DARLING) && defined(__arm64__)
+    if (success)
+        success = translateDarlingCacheTSD(info, &results->errorMessage);
+#endif
 #if defined(DARLING)
     if ( success )
         reservation.keep();
