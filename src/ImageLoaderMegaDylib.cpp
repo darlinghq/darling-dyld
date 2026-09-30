@@ -580,7 +580,7 @@ unsigned int ImageLoaderMegaDylib::updateDepth(unsigned int maxDepth)
 }
 
 
-const ImageLoader::Symbol* ImageLoaderMegaDylib::findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn) const
+const ImageLoader::Symbol* ImageLoaderMegaDylib::findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn, const ExportLookup* parent) const
 {
 	unsigned index;
 	if ( !hasDylib(thisPath, &index) )
@@ -1194,6 +1194,5 @@ uintptr_t ImageLoaderMegaDylib::bindLazy(uintptr_t lazyBindingInfoOffset, const 
 
 
 #endif // SUPPORT_ACCELERATE_TABLES
-
 
 

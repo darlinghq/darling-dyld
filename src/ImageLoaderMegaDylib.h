@@ -65,7 +65,7 @@ public:
 	virtual bool						findExportedSymbolAddress(const LinkContext& context, const char* symbolName,
 																const ImageLoader* requestorImage, int requestorOrdinalOfDef,
 																bool runResolver, const ImageLoader** foundIn, uintptr_t* address) const;
-	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn) const;
+	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn, const ExportLookup* parent = nullptr) const;
 	virtual uintptr_t					getExportedSymbolAddress(const Symbol* sym, const LinkContext& context,
 																 const ImageLoader* requestor, bool runResolver, const char* symbolName) const;
 	virtual DefinitionFlags				getExportedSymbolInfo(const Symbol* sym) const { unreachable(); }
@@ -261,7 +261,6 @@ private:
 
 
 #endif // __IMAGELOADER_MEGADYLIB__
-
 
 
 

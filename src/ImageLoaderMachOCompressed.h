@@ -82,7 +82,7 @@ protected:
 	virtual	bool						hasSubLibrary(const LinkContext& context, const ImageLoader* child) const { return false; }
 	virtual uint32_t*					segmentCommandOffsets() const;
 	virtual	void						rebase(const LinkContext& context, uintptr_t slide);
-	virtual const ImageLoader::Symbol*	findShallowExportedSymbol(const char* name, const ImageLoader** foundIn) const;
+	virtual const ImageLoader::Symbol*	findShallowExportedSymbol(const char* name, const ImageLoader** foundIn, const ExportLookup* parent = nullptr) const;
 	virtual bool						containsSymbol(const void* addr) const;
 	virtual uintptr_t					exportedSymbolAddress(const LinkContext& context, const Symbol* symbol, const ImageLoader* requestor, bool runResolver) const;
 	virtual bool						exportedSymbolIsWeakDefintion(const Symbol* symbol) const;
@@ -161,7 +161,6 @@ private:
 
 
 #endif // __IMAGELOADER_MACHO_COMPRESSED__
-
 
 
 
