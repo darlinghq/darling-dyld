@@ -387,6 +387,13 @@ static void verboseSharedCacheMappingsToConsole(const shared_file_mapping_slide_
 }
 #endif
 
+static bool cacheRangeContains(uint64_t start, uint64_t length,
+                               uint64_t address, uint64_t size)
+{
+    return length <= UINT64_MAX - start && address >= start
+        && address - start <= length && size <= length - (address - start);
+}
+
 static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoadInfo* results, CacheInfo* info)
 {
     
@@ -432,10 +439,22 @@ static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoa
     const dyld_cache_mapping_info* textMapping = &fileMappings[0];
     const dyld_cache_mapping_info* firstDataMapping = &fileMappings[1];
     const dyld_cache_mapping_info* linkeditMapping = &fileMappings[cache->header.mappingCount - 1];
+    // Validate extents before the ordering/adjacency checks below add sizes.
+    // Both VM ranges and file ranges come from the cache, not the kernel.
+    for (uint32_t i = 0; i != cache->header.mappingCount; ++i) {
+        if ( !cacheRangeContains(cache->header.sharedRegionStart, cache->header.sharedRegionSize,
+                                 fileMappings[i].address, fileMappings[i].size)
+          || !cacheRangeContains(0, cacheFileLength, fileMappings[i].fileOffset, fileMappings[i].size) ) {
+            results->errorMessage = "shared cache mapping range is invalid";
+            ::close(fd);
+            return false;
+        }
+    }
     if (  (textMapping->fileOffset != 0)
       || ((fileMappings[0].address + fileMappings[0].size) > firstDataMapping->address)
       || ((fileMappings[0].fileOffset + fileMappings[0].size) != firstDataMapping->fileOffset)
-      || ((cache->header.codeSignatureOffset + cache->header.codeSignatureSize) != cacheFileLength)
+      || (cache->header.codeSignatureOffset > cacheFileLength)
+      || (cache->header.codeSignatureSize != cacheFileLength - cache->header.codeSignatureOffset)
       || (textMapping->maxProt != (VM_PROT_READ|VM_PROT_EXECUTE))
       || (linkeditMapping->maxProt != VM_PROT_READ) ) {
         results->errorMessage = "shared cache text/linkedit mappings are invalid";
