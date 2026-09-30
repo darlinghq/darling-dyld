@@ -1034,7 +1034,8 @@ bool findInSharedCacheImage(const SharedCacheLoadInfo& loadInfo, const char* dyl
     if ( loadInfo.loadAddress == nullptr )
         return false;
 
-    if ( loadInfo.loadAddress->header.formatVersion != dyld3::closure::kFormatVersion ) {
+    if ( (loadInfo.loadAddress->header.formatVersion != dyld3::closure::kFormatVersion)
+      || (loadInfo.loadAddress->header.dylibsImageArrayAddr == 0) ) {
         // support for older cache with a different Image* format
 #if TARGET_OS_IPHONE
         uint64_t hash = 0;
@@ -1043,6 +1044,21 @@ bool findInSharedCacheImage(const SharedCacheLoadInfo& loadInfo, const char* dyl
 #endif
         const dyld_cache_image_info* const start = (dyld_cache_image_info*)((uint8_t*)loadInfo.loadAddress + loadInfo.loadAddress->header.imagesOffset);
         const dyld_cache_image_info* const end = &start[loadInfo.loadAddress->header.imagesCount];
+        // The path trie can outlive the dyld3 ImageArray format. Use recorded
+        // aliases (including framework Current paths), not guessed versions.
+        uint32_t aliasIndex = 0;
+        if ( loadInfo.loadAddress->header.mappingOffset >= 0x118
+          && loadInfo.loadAddress->header.dylibsTrieAddr != 0
+          && loadInfo.loadAddress->header.dylibsTrieSize != 0
+          && loadInfo.loadAddress->hasImagePath(dylibPathToFind, aliasIndex)
+          && aliasIndex < loadInfo.loadAddress->header.imagesCount ) {
+            const dyld_cache_image_info* p = &start[aliasIndex];
+            results->mhInCache = (const mach_header*)(p->address + loadInfo.slide);
+            results->pathInCache = (const char*)loadInfo.loadAddress + p->pathFileOffset;
+            results->slideInCache = loadInfo.slide;
+            results->image = nullptr;
+            return true;
+        }
         for (const dyld_cache_image_info* p = start; p != end; ++p) {
 #if TARGET_OS_IPHONE
             // on iOS, inode is used to hold hash of path
