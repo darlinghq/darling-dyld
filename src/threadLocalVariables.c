@@ -35,6 +35,7 @@
 #include <libkern/OSAtomic.h>
 
 #include <mach-o/dyld_priv.h>
+extern bool tlv_image_uses_cache_v2(const struct mach_header*) __attribute__((visibility("hidden")));
 
 
 #if __LP64__
@@ -232,12 +233,79 @@ tlv_free(void *storage)
 }
 
 
+static unsigned long tlv_storage_size(const struct mach_header* mh)
+{
+	uintptr_t		start = 0;
+	uintptr_t		end = 0;
+	bool foundSection = false;
+	const uint32_t cmd_count = mh->ncmds;
+	uint32_t remaining = mh->sizeofcmds;
+	const struct load_command* cmd = (struct load_command*)(((uint8_t*)mh) + sizeof(macho_header));
+	for (uint32_t i = 0; i < cmd_count; ++i) {
+		if ( remaining < sizeof(struct load_command) ||
+			 cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining ||
+			 cmd->cmdsize % sizeof(uintptr_t) != 0 )
+			return 0;
+		if ( cmd->cmd == LC_SEGMENT_COMMAND) {
+			if ( cmd->cmdsize < sizeof(macho_segment_command) )
+				return 0;
+			const macho_segment_command* seg = (macho_segment_command*)cmd;
+			if ( seg->nsects > (cmd->cmdsize - sizeof(macho_segment_command)) / sizeof(macho_section) )
+				return 0;
+			const macho_section* const sectionsStart = (macho_section*)((char*)seg + sizeof(macho_segment_command));
+			const macho_section* const sectionsEnd = &sectionsStart[seg->nsects];
+			for (const macho_section* sect=sectionsStart; sect < sectionsEnd; ++sect) {
+				switch ( sect->flags & SECTION_TYPE ) {
+					case S_THREAD_LOCAL_ZEROFILL:
+					case S_THREAD_LOCAL_REGULAR: {
+						const uintptr_t sectionStart = sect->addr;
+						if ( sect->size > UINTPTR_MAX - sectionStart )
+							return 0;
+						const uintptr_t sectionEnd = sect->addr + sect->size;
+						if ( !foundSection || (sectionStart < start) )
+							start = sectionStart;
+						if ( sectionEnd > end )
+							end = sectionEnd;
+						foundSection = true;
+						break;
+					}
+				}
+			}
+		}
+		remaining -= cmd->cmdsize;
+		cmd = (const struct load_command*)(((char*)cmd)+cmd->cmdsize);
+	}
+	return (end > start) ? (end - start) : 0;
+}
+
+
+static void tlv_normalize_descriptor(TLVDescriptor* descriptor, unsigned long storageSize)
+{
+#if __LP64__
+	// Spring 2025 dyld caches use TLV_Thunkv2. Its second word packs a
+	// 32-bit static key and the real 32-bit offset; its third word packs the
+	// initial-content delta and size. Convert that cache-only representation
+	// back to the legacy layout before replacing the key with a dynamic one.
+	const uint64_t packedKeyAndOffset = descriptor->key;
+	const uint64_t packedInitialContent = descriptor->offset;
+	const uint32_t staticKey = (uint32_t)packedKeyAndOffset;
+	const uint32_t packedOffset = (uint32_t)(packedKeyAndOffset >> 32);
+	const uint32_t packedSize = (uint32_t)(packedInitialContent >> 32);
+	if ( (staticKey != 0) && (storageSize <= UINT32_MAX)
+			&& (packedSize == storageSize) && (packedOffset <= storageSize) ) {
+		descriptor->offset = packedOffset;
+	}
+#endif
+}
+
 // called when image is loaded
 static void tlv_initialize_descriptors(const struct mach_header* mh)
 {
 	pthread_key_t	key = 0;
 	intptr_t		slide = 0;
 	bool			slideComputed = false;
+	const bool cacheV2 = tlv_image_uses_cache_v2(mh);
+	const unsigned long storageSize = cacheV2 ? tlv_storage_size(mh) : 0;
 	const uint32_t cmd_count = mh->ncmds;
 	const struct load_command* const cmds = (struct load_command*)(((uint8_t*)mh) + sizeof(macho_header));
 	const struct load_command* cmd = cmds;
@@ -264,9 +332,11 @@ static void tlv_initialize_descriptors(const struct mach_header* mh)
 						TLVDescriptor* start = (TLVDescriptor*)(sect->addr + slide);
 						TLVDescriptor* end = (TLVDescriptor*)(sect->addr + sect->size + slide);
 						for (TLVDescriptor* d=start; d < end; ++d) {
+							if ( cacheV2 )
+								tlv_normalize_descriptor(d, storageSize);
 							d->thunk = tlv_get_addr;
 							d->key = key;
-							//d->offset = d->offset;  // offset unchanged
+							// Legacy offsets remain unchanged; v2 offsets are normalized above.
 						}
 					}
 				}
@@ -441,5 +511,3 @@ void tlv_initializer()
 
 
 #endif // __has_feature(tls)
-
-
