@@ -1,0 +1,37 @@
+name: Darling CI (Submodules)
+
+on: [push, pull_request]
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Darling
+      uses: actions/checkout@v7
+      with:
+        repository: darlinghq/darling
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update && sudo apt-get install devscripts equivs debhelper
+        sudo mk-build-deps -i -r -t "apt-get --no-install-recommends -y" debian/control
+
+    # see https://github.com/actions/virtual-environments/issues/2606#issuecomment-772683150
+    - name: Free up space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+
+    - name: Build DEBs
+      run: |
+        ./tools/debian/make-deb
+
+    - name: Move DEBs
+      run: |
+        mkdir dist && mv ../*.deb dist
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4.1.0
+      with:
+        name: 'debs'
+        path: dist/
