@@ -32,10 +32,6 @@ jobs:
       run: |
         sudo rm -rf /usr/share/dotnet
 
-    - name: Update Submodule To Use ${{ github.sha }}
-      run: |
-        ( cd src/external/dyld && git checkout ${{ github.sha }} && git submodule update --init --recursive )
-
     - name: Build DEBs
       run: |
         ./tools/debian/make-deb
