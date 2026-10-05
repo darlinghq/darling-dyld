@@ -12,6 +12,16 @@ jobs:
         repository: darlinghq/darling
         submodules: recursive
 
+    - name: Delete 'src/external/dyld' submodule
+      run: |
+        rm -rf src/external/dyld
+
+    - name: Checkout Repository
+      uses: actions/checkout@v7
+      with:
+        path: src/external/dyld
+        submodules: recursive
+
     - name: Install dependencies
       run: |
         sudo apt-get update && sudo apt-get install devscripts equivs debhelper
