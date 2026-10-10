@@ -1,0 +1,14 @@
+name: Darling CI (Submodules)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    types: [ synchronize, opened, reopened, ready_for_review ]
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Full Regression
+        uses: darlinghq/darling-shared_github_actions@submodule_full_regression_v1
