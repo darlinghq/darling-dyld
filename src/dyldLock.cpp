@@ -56,4 +56,24 @@ void dyldGlobalLockRelease()
 	pthread_mutex_unlock(&sGlobalMutex);
 }
 
+#ifdef DARLING
+// Called in the child of a fork() after _dyld_atfork_prepare() took the lock
+// in the parent. The child's only thread has a new thread ID, so it can't
+// unlock a mutex that the parent's thread locked. Start over with a fresh
+// mutex, and take it again as many times as the forking thread already held
+// it before the fork (when it forked while inside a dyld API), so that its
+// later releases still match.
+void dyldGlobalLockResetInForkChild()
+{
+	static const pthread_mutex_t freshMutex = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+	int depth = _dyld_global_lock_held - 1;
+
+	sGlobalMutex = freshMutex;
+	_dyld_global_lock_held = 0;
+
+	while (depth-- > 0)
+		dyldGlobalLockAcquire();
+}
+#endif
+
 

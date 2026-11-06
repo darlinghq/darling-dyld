@@ -64,5 +64,10 @@ extern void dyldGlobalLockInitialize()		__attribute__((visibility("hidden")));
 extern void dyldGlobalLockAcquire()			__attribute__((visibility("hidden")));
 extern void dyldGlobalLockRelease()			__attribute__((visibility("hidden")));
 
+#ifdef DARLING
+// to keep the lock usable in the child of a fork()
+extern void dyldGlobalLockResetInForkChild()	__attribute__((visibility("hidden")));
+#endif
+
 #endif // __DYLDLOCK__
 
