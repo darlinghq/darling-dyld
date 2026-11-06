@@ -2059,6 +2059,13 @@ void _dyld_atfork_prepare()
 {
     if ( gUseDyld3 )
         return dyld3::_dyld_atfork_prepare();
+#ifdef DARLING
+    // Like dyld3 does with its loader lock: hold the global dyld lock across
+    // fork(), so that no other thread holds it while the process is copied.
+    // Otherwise the child inherits it locked by a thread that does not exist
+    // there, and its first dlopen(), dlsym() or dladdr() waits forever.
+    dyldGlobalLockAcquire();
+#endif
 }
 
 // SPI called __fork
@@ -2066,6 +2073,9 @@ void _dyld_atfork_parent()
 {
     if ( gUseDyld3 )
         return dyld3::_dyld_atfork_parent();
+#ifdef DARLING
+    dyldGlobalLockRelease();
+#endif
 }
 
 // SPI called __fork
@@ -2073,6 +2083,10 @@ void _dyld_fork_child()
 {
 	if ( gUseDyld3 )
 		return dyld3::_dyld_fork_child();
+
+#ifdef DARLING
+	dyldGlobalLockResetInForkChild();
+#endif
 
 	DYLD_NO_LOCK_THIS_BLOCK;
     typedef void (*funcType)();
