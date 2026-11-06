@@ -103,21 +103,18 @@
 
 
 // <rdar://problem/13590567> optimize away dyld's initializers
-#define VECTOR_NEVER_DESTRUCTED(type) \
-	namespace std { \
-		template <> \
-		__vector_base<type, std::allocator<type> >::~__vector_base() { } \
-	}
-#define VECTOR_NEVER_DESTRUCTED_EXTERN(type) \
-       namespace std { \
-               template <> \
-               __vector_base<type, std::allocator<type> >::~__vector_base(); \
-       }
-#define VECTOR_NEVER_DESTRUCTED_IMPL(type) \
-       namespace std { \
-               template <> \
-               __vector_base<type, std::allocator<type> >::~__vector_base() { } \
-       }
+//
+// DARLING: Apple's original macros patched the destructor of libcxx's
+// internal `std::__vector_base` class to be a no-op, saving the init-time
+// cost of running ~vector<T>() on dyld globals. libcxx 15 refactored that
+// implementation and the `__vector_base` class is gone, so the macro no
+// longer compiles. Since the optimization is non-essential, expand to nothing.
+// If destructor-elision turns out to matter for dyld startup time, replace
+// these stubs with the libcxx-15 equivalent (likely targeting the new
+// `__vector_base_common` or via `[[clang::trivial_abi]]`).
+#define VECTOR_NEVER_DESTRUCTED(type)
+#define VECTOR_NEVER_DESTRUCTED_EXTERN(type)
+#define VECTOR_NEVER_DESTRUCTED_IMPL(type)
 
 // utilities
 namespace dyld {
