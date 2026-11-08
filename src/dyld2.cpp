@@ -199,7 +199,17 @@ extern "C" const macho_header __dso_handle;
 extern bool gEnableSharedCacheDataConst;
 
 #ifdef DARLING
+#include <darling/emulation/common/dc_image_snapshot.h>
 #include <darling/emulation/linux_premigration/ext/for-sysconfig.h>
+
+// What Darling's code signing configuration (held by darlingserver, see
+// `dserver_system_config_t`) asks of this process. It is worked out once,
+// when dyld starts. With the default configuration everything stays false
+// and dyld behaves as if there were no code signing at all.
+static struct {
+	// map images from a sealed snapshot of their file
+	bool snapshotImages;
+} sDarlingCodeSigning;
 
 // Whether the process's entitlements set `key` to true. The entitlements
 // come from csops(CS_OPS_ENTITLEMENTS_BLOB): an 8-byte blob header (magic and
@@ -279,6 +289,10 @@ int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
 	const bool enforce = (config.code_signing_policy == dserver_code_signing_policy_enforce);
 	if ( !enforce )
 		return 0;
+
+	// Verify and map the same bytes: under "enforce" a signature decides
+	// whether an image may be loaded.
+	sDarlingCodeSigning.snapshotImages = true;
 
 	uint32_t flags = 0;
 	if ( csops(0, CS_OPS_STATUS, &flags, sizeof(flags)) != 0 )
@@ -3455,6 +3469,51 @@ static bool isSimulatorBinary(const uint8_t* firstPages, const char* path)
 }
 #endif
 
+#ifdef DARLING
+// A sealed copy of an image file (see DC_F_SNAPSHOT_IMAGE), made only when
+// the code signing configuration asks for it. Reading, verifying and mapping
+// the copy ensures the bytes whose signature was checked are the bytes that
+// get mapped, even if the file changes in the meantime. The caller keeps its
+// own descriptor; only the copy's descriptor is owned here.
+class DarlingImageSnapshot {
+public:
+	DarlingImageSnapshot(int source, const struct stat& stat_buf) : _fd(-1)
+	{
+		if ( !sDarlingCodeSigning.snapshotImages )
+			return;
+
+		int snapshot = fcntl(source, DC_F_SNAPSHOT_IMAGE, 0);
+		if ( snapshot < 0 )
+			throwf("cannot snapshot image: errno=%d", errno);
+
+		// the rest of loading still uses the stat data of the file itself
+		struct stat snapshotStat;
+		if ( (fstat(snapshot, &snapshotStat) != 0) || (snapshotStat.st_size != stat_buf.st_size) ) {
+			close(snapshot);
+			throw "file changed while it was being loaded";
+		}
+
+		_fd = snapshot;
+	}
+
+	~DarlingImageSnapshot()
+	{
+		if ( _fd >= 0 )
+			close(_fd);
+	}
+
+	DarlingImageSnapshot(const DarlingImageSnapshot&) = delete;
+	DarlingImageSnapshot& operator=(const DarlingImageSnapshot&) = delete;
+
+	int descriptor(int original) const
+	{
+		return (_fd >= 0) ? _fd : original;
+	}
+
+private:
+	int _fd;
+};
+#endif
 
 
 // map in file and instantiate an ImageLoader
@@ -3467,6 +3526,11 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 	// validate it is a file (not directory)
 	if ( (stat_buf.st_mode & S_IFMT) != S_IFREG )
 		throw "not a file";
+
+#ifdef DARLING
+	DarlingImageSnapshot snapshot(fd, stat_buf);
+	fd = snapshot.descriptor(fd);
+#endif
 
 	uint8_t firstPages[MAX_MACH_O_HEADER_AND_LOAD_COMMANDS_SIZE];
 	bool shortPage = false;
