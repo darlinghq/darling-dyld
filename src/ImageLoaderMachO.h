@@ -236,6 +236,9 @@ protected:
 			bool		reserveAddressRange(uintptr_t start, size_t length);
 			void		mapSegments(int fd, uint64_t offsetInFat, uint64_t lenInFat, uint64_t fileLen, const LinkContext& context);
 			void		mapSegments(const void* memoryImage, uint64_t imageLen, const LinkContext& context);
+#ifdef DARLING
+			void		darlingSealSegments();
+#endif
 			void		UnmapSegments();
 			void		__attribute__((noreturn)) throwSymbolNotFound(const LinkContext& context, const char* symbol, 
 																	const char* referencedFrom, const char* fromVersMismatch,

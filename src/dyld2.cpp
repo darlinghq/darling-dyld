@@ -209,6 +209,8 @@ extern bool gEnableSharedCacheDataConst;
 static struct {
 	// map images from a sealed snapshot of their file
 	bool snapshotImages;
+	// make the read-only segments of images immutable
+	bool sealImages;
 } sDarlingCodeSigning;
 
 // Whether the process's entitlements set `key` to true. The entitlements
@@ -263,12 +265,15 @@ static bool darlingHasTrueEntitlement(const char* key)
 
 // Darling's stand-in for AMFI's dyld policy.
 //
-// By default (CodeSigningPolicy "off" or "warn") every DYLD_*
+// By default (CodeSigningPolicy "off" or "warn", SealImages off) every DYLD_*
 // variable, @path and fallback path is allowed, whatever the program's code
 // signature says. macOS ignores DYLD_* variables for programs that use the
 // hardened runtime (CS_RUNTIME) unless they carry the get-task-allow or the
 // allow-dyld-environment-variables entitlement; Darling does the same only
 // when the policy is "enforce".
+//
+// SealImages applies only to hardened programs without get-task-allow, so
+// that programs built for debugging stay debuggable.
 int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
 {
 	const uint64_t allowEverything =
@@ -287,12 +292,8 @@ int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
 		return 0;
 
 	const bool enforce = (config.code_signing_policy == dserver_code_signing_policy_enforce);
-	if ( !enforce )
+	if ( !enforce && !config.seal_images )
 		return 0;
-
-	// Verify and map the same bytes: under "enforce" a signature decides
-	// whether an image may be loaded.
-	sDarlingCodeSigning.snapshotImages = true;
 
 	uint32_t flags = 0;
 	if ( csops(0, CS_OPS_STATUS, &flags, sizeof(flags)) != 0 )
@@ -300,13 +301,26 @@ int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
 
 	const bool hardened = (flags & CS_RUNTIME) && !(flags & CS_GET_TASK_ALLOW);
 
-	if ( hardened && !darlingHasTrueEntitlement("com.apple.security.cs.allow-dyld-environment-variables") ) {
+	sDarlingCodeSigning.sealImages = hardened && config.seal_images;
+	// Verify and map the same bytes: under "enforce" a signature decides
+	// whether an image may be loaded, and a sealed image must be what its
+	// file was when it was loaded.
+	sDarlingCodeSigning.snapshotImages = enforce || sDarlingCodeSigning.sealImages;
+
+	if ( enforce && hardened && !darlingHasTrueEntitlement("com.apple.security.cs.allow-dyld-environment-variables") ) {
 		*output_flags = AMFI_DYLD_OUTPUT_ALLOW_AT_PATH |
 			AMFI_DYLD_OUTPUT_ALLOW_FALLBACK_PATHS |
 			AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION;
 	}
 
 	return 0;
+}
+
+namespace dyld {
+	bool darlingSealImages()
+	{
+		return sDarlingCodeSigning.sealImages;
+	}
 }
 #endif // DARLING
 

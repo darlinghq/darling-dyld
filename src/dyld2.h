@@ -127,6 +127,10 @@ namespace dyld {
 	bool						sandboxBlockedMmap(const char* path);
 	bool						sandboxBlockedStat(const char* path);
     void                        setMainEntry(void (*main)());
+#ifdef DARLING
+	// whether Darling's SealImages setting applies to this process
+	bool						darlingSealImages();
+#endif
 
 #if SUPPORT_ACCELERATE_TABLES
 	bool						dlopenFromCache(const char* path, int mode, void** handle);

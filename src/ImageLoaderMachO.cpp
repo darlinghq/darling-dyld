@@ -47,6 +47,12 @@
 #include <stdint.h>
 #include <System/sys/codesign.h>
 
+#ifdef DARLING
+extern "C" {
+#include <darling/emulation/common/dc_mseal.h>
+}
+#endif
+
 #if __has_feature(ptrauth_calls)
 #include <ptrauth.h>
 #endif
@@ -2739,7 +2745,44 @@ void ImageLoaderMachO::mapSegments(int fd, uint64_t offsetInFat, uint64_t lenInF
 
 	// update slide to reflect load location			
 	this->setSlide(slide);
+
+#ifdef DARLING
+	if ( dyld::darlingSealImages() )
+		this->darlingSealSegments();
+#endif
 }
+
+#ifdef DARLING
+// Darling's SealImages setting: make the read-only code and __LINKEDIT of the
+// image immutable, so they can no longer be remapped, made writable or
+// unmapped. Segments that dyld itself still has to modify (text relocations)
+// are left alone.
+void ImageLoaderMachO::darlingSealSegments()
+{
+	static bool sSealingUnsupported = false;
+
+	for (unsigned int i = 0, e = segmentCount(); i < e && !sSealingUnsupported; ++i) {
+		if ( segUnaccessible(i) || segWriteable(i) || (segFileSize(i) == 0) )
+			continue;
+		if ( (strcmp(segName(i), "__TEXT") != 0) && (strcmp(segName(i), "__LINKEDIT") != 0) )
+			continue;
+		if ( segExecutable(i) && (segHasRebaseFixUps(i) || segHasBindFixUps(i)) )
+			continue;
+
+		// only the part that is mapped from the file
+		const int protection = PROT_READ | (segExecutable(i) ? PROT_EXEC : 0);
+		const int result = __darling_mseal_range((void*)segActualLoadAddress(i), dyld_page_round(segFileSize(i)), protection);
+		if ( result == -ENOSYS ) {
+			// the host kernel cannot seal memory (Linux before 6.10)
+			dyld::warn("cannot seal images: the host kernel does not support mseal()\n");
+			sSealingUnsupported = true;
+		}
+		else if ( result < 0 ) {
+			dyld::warn("cannot seal %s in %s: errno=%d\n", segName(i), getPath(), -result);
+		}
+	}
+}
+#endif
 
 void ImageLoaderMachO::mapSegments(const void* memoryImage, uint64_t imageLen, const LinkContext& context)
 {
