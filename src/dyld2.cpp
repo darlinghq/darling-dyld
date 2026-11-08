@@ -301,7 +301,13 @@ int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
 
 	const bool hardened = (flags & CS_RUNTIME) && !(flags & CS_GET_TASK_ALLOW);
 
+#if __i386__
+	// Linux supports mseal() for 64-bit processes only, so 32-bit images
+	// cannot be sealed.
+	sDarlingCodeSigning.sealImages = false;
+#else
 	sDarlingCodeSigning.sealImages = hardened && config.seal_images;
+#endif
 	// Verify and map the same bytes: under "enforce" a signature decides
 	// whether an image may be loaded, and a sealed image must be what its
 	// file was when it was loaded.
