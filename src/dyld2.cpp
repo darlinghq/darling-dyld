@@ -100,9 +100,6 @@
 		AMFI_DYLD_OUTPUT_ALLOW_LIBRARY_INTERPOSING = (1 << 6),
 	};
 	extern "C" int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags);
-#ifdef DARLING
-    int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags) { *output_flags = 0x3F; return 0; }
-#endif
 #else
 	#include <libamfi.h>
 #endif
@@ -200,6 +197,104 @@ extern "C" {
 extern "C" const macho_header __dso_handle;
 
 extern bool gEnableSharedCacheDataConst;
+
+#ifdef DARLING
+#include <darling/emulation/linux_premigration/ext/for-sysconfig.h>
+
+// Whether the process's entitlements set `key` to true. The entitlements
+// come from csops(CS_OPS_ENTITLEMENTS_BLOB): an 8-byte blob header (magic and
+// big-endian length) followed by an XML property list.
+static bool darlingHasTrueEntitlement(const char* key)
+{
+	// a sane upper bound; darlingserver reads no larger signatures either
+	const uint32_t maxLength = 16 * 1024 * 1024;
+	const size_t headerSize = 8;
+	uint8_t header[headerSize] = {};
+
+	// Without entitlements the call succeeds and leaves the buffer as it is
+	// (a zero length); otherwise the buffer is too small and it reports the
+	// length in the header.
+	if ( csops(0, CS_OPS_ENTITLEMENTS_BLOB, header, sizeof(header)) == 0 || errno != ERANGE )
+		return false;
+
+	uint32_t length = OSReadBigInt32(header, 4);
+	if ( length <= headerSize || length > maxLength )
+		return false;
+
+	char* blob = (char*)malloc(length + 1);
+	if ( blob == NULL )
+		return false;
+
+	bool result = false;
+	if ( csops(0, CS_OPS_ENTITLEMENTS_BLOB, blob, length) == 0 ) {
+		blob[length] = '\0';
+
+		const char* plist = blob + headerSize;
+		const size_t plistLength = strnlen(plist, length - headerSize);
+		const size_t keyLength = strlen(key);
+
+		// look for <key>KEY</key> followed by <true/>
+		for (size_t i = 0; i + 5 + keyLength + 6 <= plistLength; ++i) {
+			if ( strncmp(&plist[i], "<key>", 5) != 0 || strncmp(&plist[i + 5], key, keyLength) != 0
+				|| strncmp(&plist[i + 5 + keyLength], "</key>", 6) != 0 )
+				continue;
+
+			const char* value = &plist[i + 5 + keyLength + 6];
+			while ( *value == ' ' || *value == '\t' || *value == '\n' || *value == '\r' )
+				++value;
+			result = (strncmp(value, "<true/>", 7) == 0) || (strncmp(value, "<true />", 8) == 0);
+			break;
+		}
+	}
+
+	free(blob);
+	return result;
+}
+
+// Darling's stand-in for AMFI's dyld policy.
+//
+// By default (CodeSigningPolicy "off" or "warn") every DYLD_*
+// variable, @path and fallback path is allowed, whatever the program's code
+// signature says. macOS ignores DYLD_* variables for programs that use the
+// hardened runtime (CS_RUNTIME) unless they carry the get-task-allow or the
+// allow-dyld-environment-variables entitlement; Darling does the same only
+// when the policy is "enforce".
+int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
+{
+	const uint64_t allowEverything =
+		AMFI_DYLD_OUTPUT_ALLOW_AT_PATH |
+		AMFI_DYLD_OUTPUT_ALLOW_PATH_VARS |
+		AMFI_DYLD_OUTPUT_ALLOW_CUSTOM_SHARED_CACHE |
+		AMFI_DYLD_OUTPUT_ALLOW_FALLBACK_PATHS |
+		AMFI_DYLD_OUTPUT_ALLOW_PRINT_VARS |
+		AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION;
+
+	(void)input_flags;
+	*output_flags = allowEverything;
+
+	dserver_system_config_t config;
+	if ( __darling_get_system_config(&config) != 0 )
+		return 0;
+
+	const bool enforce = (config.code_signing_policy == dserver_code_signing_policy_enforce);
+	if ( !enforce )
+		return 0;
+
+	uint32_t flags = 0;
+	if ( csops(0, CS_OPS_STATUS, &flags, sizeof(flags)) != 0 )
+		return 0;
+
+	const bool hardened = (flags & CS_RUNTIME) && !(flags & CS_GET_TASK_ALLOW);
+
+	if ( hardened && !darlingHasTrueEntitlement("com.apple.security.cs.allow-dyld-environment-variables") ) {
+		*output_flags = AMFI_DYLD_OUTPUT_ALLOW_AT_PATH |
+			AMFI_DYLD_OUTPUT_ALLOW_FALLBACK_PATHS |
+			AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION;
+	}
+
+	return 0;
+}
+#endif // DARLING
 
 
 //
@@ -3361,6 +3456,7 @@ static bool isSimulatorBinary(const uint8_t* firstPages, const char* path)
 #endif
 
 
+
 // map in file and instantiate an ImageLoader
 static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* path, const LoadContext& context)
 {
@@ -3369,7 +3465,7 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 	uint64_t fileLength = stat_buf.st_size;
 
 	// validate it is a file (not directory)
-	if ( (stat_buf.st_mode & S_IFMT) != S_IFREG ) 
+	if ( (stat_buf.st_mode & S_IFMT) != S_IFREG )
 		throw "not a file";
 
 	uint8_t firstPages[MAX_MACH_O_HEADER_AND_LOAD_COMMANDS_SIZE];

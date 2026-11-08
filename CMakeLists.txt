@@ -19,6 +19,8 @@ add_definitions(-DHAVE_STDINT_H=1)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/launch-cache)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# dserver_system_config_t, for the code signing configuration
+include_directories(${CMAKE_SOURCE_DIR}/src/external/darlingserver/include)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/include
 	${CMAKE_CURRENT_SOURCE_DIR}/include/mach-o
 	${CMAKE_CURRENT_SOURCE_DIR}/dyld3/shared-cache
