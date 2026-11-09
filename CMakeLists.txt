@@ -40,6 +40,7 @@ add_circular(system_dyld FAT
 	src/dyld_process_info.cpp
 	src/dyld_process_info_notify.cpp
 	src/start_glue.S
+	darling/src/macho_utils.c
 	dyld3/AllImages.cpp
 	dyld3/APIs.cpp
 	dyld3/APIs_macOS.cpp
