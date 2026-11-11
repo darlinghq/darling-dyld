@@ -69,7 +69,7 @@ public:
 	virtual	void						updateUsesCoalIterator(CoalIterator&, uintptr_t newAddr, ImageLoader* target, unsigned targetIndex, const LinkContext& context);
 	virtual void						registerInterposing(const LinkContext& context);
 	virtual bool						usesChainedFixups() const;
-	virtual void						makeDataReadOnly() const;
+	virtual void						setReadOnlyDataWritable(bool writable) const;
 
 protected:
 	virtual void						doInterpose(const LinkContext& context);

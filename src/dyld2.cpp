@@ -1428,7 +1428,9 @@ static void notifyBatchPartial(dyld_image_states state, bool orLater, dyld_image
 			if ( (onlyHandler == NULL) && ((state == dyld_image_state_bound) || (orLater && (dyld_image_state_bound > state))) && (sNotifyObjCMapped != NULL) ) {
 				const char* paths[imageCount];
 				const mach_header* mhs[imageCount];
+				ImageLoader* unprotected[imageCount];
 				unsigned objcImageCount = 0;
+				unsigned unprotectedCount = 0;
 				for (int i=0; i < imageCount; ++i) {
 					ImageLoader* image = findImageByMachHeader(infos[i].imageLoadAddress);
 					bool hasObjC = false;
@@ -1451,8 +1453,15 @@ static void notifyBatchPartial(dyld_image_states state, bool orLater, dyld_image
 						paths[objcImageCount] = infos[i].imageFilePath;
 						mhs[objcImageCount]   = infos[i].imageLoadAddress;
 						++objcImageCount;
-						if ( image != NULL )
+						if ( image != NULL ) {
 							image->setObjCMappedNotified();
+							// objc's map_images rewrites selrefs/protorefs/classrefs, which may live in an
+							// SG_READ_ONLY __DATA_CONST that link() already protected
+							if ( image->madeDataReadOnly() ) {
+								image->setReadOnlyDataWritable(true);
+								unprotected[unprotectedCount++] = image;
+							}
+						}
 					}
 				}
 				if ( objcImageCount != 0 ) {
@@ -1462,6 +1471,8 @@ static void notifyBatchPartial(dyld_image_states state, bool orLater, dyld_image
 					uint64_t t1 = mach_absolute_time();
 					ImageLoader::fgTotalObjCSetupTime += (t1-t0);
 				}
+				for (unsigned i=0; i < unprotectedCount; ++i)
+					unprotected[i]->setReadOnlyDataWritable(false);
 			}
 		}
         allImagesUnlock();
