@@ -462,7 +462,13 @@ public:
 																bool runResolver, const ImageLoader** foundIn, uintptr_t* address) const;
 
 										// search symbol table of definitions in this image for requested name
-	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn) const = 0;
+	struct ExportLookup {
+		const ImageLoader* image;
+		const char* name;
+		const ExportLookup* parent;
+		bool searchReExports;
+	};
+	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn, const ExportLookup* parent = nullptr) const = 0;
 	
 										// search symbol table of definitions in this image for requested name
 	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const ImageLoader** foundIn) const {
@@ -914,4 +920,3 @@ VECTOR_NEVER_DESTRUCTED_EXTERN(ImageLoader::InterposeTuple);
 
 
 #endif
-

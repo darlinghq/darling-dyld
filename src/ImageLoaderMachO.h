@@ -67,7 +67,7 @@ public:
 	virtual uintptr_t					getSlide() const;
 	virtual const void*					getEnd() const;
 	virtual bool						hasCoalescedExports() const;
-	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn) const;
+	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn, const ExportLookup* parent = nullptr) const;
 	virtual uintptr_t					getExportedSymbolAddress(const Symbol* sym, const LinkContext& context, 
 																const ImageLoader* requestor, bool runResolver, const char*) const;
 	virtual DefinitionFlags				getExportedSymbolInfo(const Symbol* sym) const;
@@ -179,7 +179,7 @@ protected:
 	virtual	bool						isSubframeworkOf(const LinkContext& context, const ImageLoader* image) const = 0;
 	virtual	bool						hasSubLibrary(const LinkContext& context, const ImageLoader* child) const = 0;
 	virtual uint32_t*					segmentCommandOffsets() const = 0;
-	virtual const ImageLoader::Symbol*	findShallowExportedSymbol(const char* name, const ImageLoader** foundIn) const = 0;
+	virtual const ImageLoader::Symbol*	findShallowExportedSymbol(const char* name, const ImageLoader** foundIn, const ExportLookup* parent = nullptr) const = 0;
 	virtual bool						containsSymbol(const void* addr) const = 0;
 	virtual uintptr_t					exportedSymbolAddress(const LinkContext& context, const Symbol* symbol, const ImageLoader* requestor, bool runResolver) const = 0;
 	virtual bool						exportedSymbolIsWeakDefintion(const Symbol* symbol) const = 0;
@@ -295,7 +295,5 @@ protected:
 
 
 #endif // __IMAGELOADERMACHO__
-
-
 
 

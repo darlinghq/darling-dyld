@@ -894,7 +894,7 @@ const struct macho_nlist* ImageLoaderMachOClassic::binarySearch(const char* key,
 }
 
 
-const ImageLoader::Symbol* ImageLoaderMachOClassic::findShallowExportedSymbol(const char* name, const ImageLoader** foundIn) const
+const ImageLoader::Symbol* ImageLoaderMachOClassic::findShallowExportedSymbol(const char* name, const ImageLoader** foundIn, const ExportLookup* parent) const
 {
 	const struct macho_nlist* sym = NULL;
 	if ( fDynamicInfo->tocoff == 0 )
@@ -2089,5 +2089,4 @@ const char* ImageLoaderMachOClassic::findClosestSymbol(const void* addr, const v
 	}
 	return NULL;
 }
-
 
