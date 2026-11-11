@@ -64,6 +64,9 @@ extern "C" {
 #endif
 #include "Tracing.h"
 #include "dyld2.h"
+#if defined(DARLING) && (defined(__aarch64__) || defined(__arm64__))
+#include "DarlingDylibArena.h"
+#endif
 
 // <rdar://problem/8718137> use stack guard random value to add padding between dylibs
 extern "C" long __stack_chk_guard;
@@ -2600,13 +2603,13 @@ uintptr_t ImageLoaderMachO::reserveAnAddressRange(size_t length, const ImageLoad
 	 * above 2^47 collides with ObjC's FAST_DATA_MASK (47 bits) and crashes
 	 * class_initialize. Sequentially hand out low-VA slots so all dylibs
 	 * remain within the addressable range. */
-	static uintptr_t fgDarlingNextDylibAddr = 0x300000000ULL; /* leave 0x100/0x200 ranges for exe + dyld */
-	addr = fgDarlingNextDylibAddr;
-	kern_return_t r = vm_alloc(&addr, size, VM_FLAGS_FIXED | VM_MAKE_TAG(VM_MEMORY_DYLIB));
-	if ( r == KERN_SUCCESS ) {
-		fgDarlingNextDylibAddr = addr + size + 0x100000; /* leave a 1 MiB gap */
+	static uintptr_t fgDarlingNextDylibAddr = DARLING_DYLIB_ARENA_BASE;
+	addr = darling_dylib_arena_claim(&fgDarlingNextDylibAddr, size, [](uintptr_t slot, size_t slotSize) -> int {
+		vm_address_t fixedAddr = slot;
+		return vm_alloc(&fixedAddr, slotSize, VM_FLAGS_FIXED | VM_MAKE_TAG(VM_MEMORY_DYLIB)) == KERN_SUCCESS;
+	});
+	if ( addr != 0 )
 		return addr;
-	}
 	/* fall back to ANYWHERE — at least the system might still be usable */
 	addr = 0;
 #endif

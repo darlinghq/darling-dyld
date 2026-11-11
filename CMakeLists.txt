@@ -171,3 +171,7 @@ install(FILES
 	libexec/darling/usr/share/man/man3
 )
 
+
+# Host-side unit tests, run with ctest; they need no Darling build.
+enable_testing()
+add_test(NAME dyld_host_tests COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/darling/tests/run-host-tests.sh)
