@@ -35,6 +35,7 @@
 #include <libkern/OSAtomic.h>
 
 #include <mach-o/dyld_priv.h>
+#include "dyld_cache_ranges.h"
 extern bool tlv_image_uses_cache_v2(const struct mach_header*) __attribute__((visibility("hidden")));
 
 
@@ -282,19 +283,9 @@ static unsigned long tlv_storage_size(const struct mach_header* mh)
 static void tlv_normalize_descriptor(TLVDescriptor* descriptor, unsigned long storageSize)
 {
 #if __LP64__
-	// Spring 2025 dyld caches use TLV_Thunkv2. Its second word packs a
-	// 32-bit static key and the real 32-bit offset; its third word packs the
-	// initial-content delta and size. Convert that cache-only representation
-	// back to the legacy layout before replacing the key with a dynamic one.
-	const uint64_t packedKeyAndOffset = descriptor->key;
-	const uint64_t packedInitialContent = descriptor->offset;
-	const uint32_t staticKey = (uint32_t)packedKeyAndOffset;
-	const uint32_t packedOffset = (uint32_t)(packedKeyAndOffset >> 32);
-	const uint32_t packedSize = (uint32_t)(packedInitialContent >> 32);
-	if ( (staticKey != 0) && (storageSize <= UINT32_MAX)
-			&& (packedSize == storageSize) && (packedOffset <= storageSize) ) {
-		descriptor->offset = packedOffset;
-	}
+	uint64_t offset;
+	if ( dyld_tlv_unpack_v2(descriptor->key, descriptor->offset, storageSize, &offset) )
+		descriptor->offset = (unsigned long)offset;
 #endif
 }
 

@@ -45,6 +45,7 @@
 #include <TargetConditionals.h>
 
 #include "dyld_cache_format.h"
+#include "dyld_cache_ranges.h"
 #include "SharedCacheRuntime.h"
 #include "Loading.h"
 #include "BootArgs.h"
@@ -387,11 +388,9 @@ static void verboseSharedCacheMappingsToConsole(const shared_file_mapping_slide_
 }
 #endif
 
-static bool cacheRangeContains(uint64_t start, uint64_t length,
-                               uint64_t address, uint64_t size)
+static inline bool cacheRangeContains(uint64_t start, uint64_t length, uint64_t address, uint64_t size)
 {
-    return length <= UINT64_MAX - start && address >= start
-        && address - start <= length && size <= length - (address - start);
+    return dyld_cache_range_contains(start, length, address, size);
 }
 
 static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoadInfo* results, CacheInfo* info)
