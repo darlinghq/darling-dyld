@@ -47,6 +47,8 @@
 #include "Logging.h"
 #include "Diagnostics.h"
 #include "DyldSharedCache.h"
+#include "dyld_objc_queries.h"
+#include "objc-shared-cache.h"
 #include "PathOverrides.h"
 #include "APIs.h"
 #include "Closure.h"
@@ -1230,6 +1232,37 @@ bool _dyld_shared_cache_optimized()
         return (sharedCache->header.cacheType == kDyldSharedCacheTypeProduction);
     }
     return false;
+}
+
+bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex)
+{
+    log_apis("_dyld_is_preoptimized_objc_image_loaded(%u)\n", imageIndex);
+
+    const DyldSharedCache* sharedCache = (DyldSharedCache*)gAllImages.cacheLoadAddress();
+    if ( (sharedCache == nullptr) || !dyld_cache_image_index_valid(sharedCache->header.imagesCount, imageIndex) )
+        return false;
+
+    const closure::ImageNum num = dyld_cache_image_num_for_index(imageIndex);
+    __block bool found = false;
+    gAllImages.forEachImage(^(const LoadedImage& loadedImage, bool& stop) {
+        if ( loadedImage.image()->representsImageNum(num) ) {
+            found = true;
+            stop = true;
+        }
+    });
+    return found;
+}
+
+size_t _dyld_objc_class_count()
+{
+    log_apis("_dyld_objc_class_count()\n");
+
+    const DyldSharedCache* sharedCache = (DyldSharedCache*)gAllImages.cacheLoadAddress();
+    if ( sharedCache == nullptr )
+        return 0;
+    const objc_opt::objc_opt_t* objcOpt = sharedCache->objcOpt();
+    const objc_opt::objc_clsopt_t* classes = (objcOpt != nullptr) ? objcOpt->clsopt() : nullptr;
+    return (classes != nullptr) ? classes->occupied : 0;
 }
 
 bool _dyld_shared_cache_is_locally_built()

@@ -157,6 +157,10 @@ const void* _dyld_get_shared_cache_range(size_t* length) TEMP_HIDDEN;
 
 bool _dyld_shared_cache_optimized() TEMP_HIDDEN;
 
+bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex) TEMP_HIDDEN;
+
+size_t _dyld_objc_class_count() TEMP_HIDDEN;
+
 bool _dyld_shared_cache_is_locally_built() TEMP_HIDDEN;
     
 uint32_t _dyld_launch_mode() TEMP_HIDDEN;

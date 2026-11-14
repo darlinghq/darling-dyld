@@ -54,6 +54,8 @@
 #include "dyld2.h"
 #include "dyldLibSystemInterface.h"
 #include "DyldSharedCache.h"
+#include "dyld_objc_queries.h"
+#include "objc-shared-cache.h"
 #include "MachOFile.h"
 
 #undef _POSIX_C_SOURCE
@@ -234,6 +236,8 @@ static const struct dyld_func dyld_funcs[] = {
     {"__dyld_is_memory_immutable",						(void*)_dyld_is_memory_immutable },
     {"__dyld_objc_notify_register",						(void*)_dyld_objc_notify_register },
     {"__dyld_get_shared_cache_uuid",					(void*)_dyld_get_shared_cache_uuid },
+    {"__dyld_is_preoptimized_objc_image_loaded",		(void*)_dyld_is_preoptimized_objc_image_loaded },
+    {"__dyld_objc_class_count",							(void*)_dyld_objc_class_count },
     {"__dyld_get_shared_cache_range",					(void*)_dyld_get_shared_cache_range },
     {"__dyld_images_for_addresses",						(void*)_dyld_images_for_addresses },
     {"__dyld_register_for_image_loads",					(void*)_dyld_register_for_image_loads },
@@ -2264,6 +2268,24 @@ const void* _dyld_get_shared_cache_range(size_t* length)
         return cache;
     }
 	return nullptr;
+}
+
+bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex)
+{
+	const DyldSharedCache* cache = (DyldSharedCache*)dyld::imMemorySharedCacheHeader();
+	if ( (cache == nullptr) || !dyld_cache_image_index_valid(cache->header.imagesCount, imageIndex) )
+		return false;
+	return dyld::findLoadedImageByInstallPath(cache->getIndexedImagePath(imageIndex)) != nullptr;
+}
+
+size_t _dyld_objc_class_count()
+{
+	const DyldSharedCache* cache = (DyldSharedCache*)dyld::imMemorySharedCacheHeader();
+	if ( cache == nullptr )
+		return 0;
+	const objc_opt::objc_opt_t* objcOpt = cache->objcOpt();
+	const objc_opt::objc_clsopt_t* classes = (objcOpt != nullptr) ? objcOpt->clsopt() : nullptr;
+	return (classes != nullptr) ? classes->occupied : 0;
 }
 
 void _dyld_images_for_addresses(unsigned count, const void* addresses[], struct dyld_image_uuid_offset infos[])
