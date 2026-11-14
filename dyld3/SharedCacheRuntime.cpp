@@ -35,7 +35,6 @@
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
 #include <sys/mman.h>
-#include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
@@ -908,6 +907,22 @@ public:
 #endif
 
 #if defined(DARLING) && defined(__arm64__)
+// A macOS arm64 cache reads the Darwin thread-specific data base from
+// TPIDRRO_EL0, which a Linux process cannot set. After a private mapping, every
+// such read in the cache's executable mappings is rewritten so that it yields
+// the base from the native TLS slot libsystem_kernel fills (see
+// dyld_tsd_rewrite.h for the veneer and the private trap used as fallback).
+//
+// The rewrite writes into the process's private copy of the cache only. Pages
+// are made writable (never writable and executable together) for the scan, the
+// instruction cache is invalidated for the changed range before execute
+// permission returns, and the veneers sit in a separate anonymous mapping that
+// becomes read-only executable once filled. The cache is not code-signed or
+// sealed by dyld, so nothing here fights those protections; every executable
+// mapping is read once, which costs startup time proportional to the cache.
+#include <libkern/OSCacheControl.h>
+#include "dyld_tsd_rewrite.h"
+
 extern "C" unsigned long sys_thread_get_native_tsd_slot_offset(void);
 
 class DarlingTSDReadVeneers {
@@ -916,17 +931,11 @@ class DarlingTSDReadVeneers {
     unsigned long slot = 0;
     bool committed = false;
     static const size_t capacity = 1024 * 1024;
-    static bool branch(uintptr_t from, uintptr_t to, uint32_t& encoded) {
-        int64_t delta = (int64_t)to - (int64_t)from;
-        if ((delta & 3) || delta < -(1LL << 27) || delta >= (1LL << 27))
-            return false;
-        encoded = 0x14000000U | ((uint32_t)(delta >> 2) & 0x03FFFFFFU);
-        return true;
-    }
 public:
     DarlingTSDReadVeneers(uintptr_t cacheStart, unsigned long offset) : slot(offset) {
-        if (offset < 16 || offset > 32760 || (offset & 7) || cacheStart <= capacity)
+        if (!dyld_tsd_slot_offset_valid(offset) || cacheStart <= capacity)
             return;
+        // Just below the cache, where a branch from its text can reach (+-128 MiB).
         void* desired = (void*)(cacheStart - capacity);
         void* mapped = ::mmap(desired, capacity, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (mapped != desired) {
@@ -938,23 +947,19 @@ public:
     ~DarlingTSDReadVeneers() {
         if (memory && !committed) ::munmap(memory, capacity);
     }
+    // The instruction that replaces `mrs Xd, TPIDRRO_EL0` at `original`: a
+    // branch to a veneer when one can be placed and reached, else the trap.
     uint32_t translate(uint32_t reg, uintptr_t original) {
-        if (reg == 31) return 0xD503201FU; // MRS XZR has no observable result
-        uint32_t entryBranch, returnBranch;
-        if (!memory || used + 20 > capacity
-            || !branch(original, (uintptr_t)memory + used, entryBranch)
-            || !branch((uintptr_t)memory + used + 16, original + 4, returnBranch))
-            return 0x0000DA00U | reg;
+        if (reg == 31) return DYLD_A64_NOP; // MRS XZR has no observable result
+        uint32_t entryBranch;
         uint32_t* code = (uint32_t*)((uintptr_t)memory + used);
-        code[0] = 0xD53BD040U | reg; // mrs Xd, TPIDR_EL0
-        code[1] = 0xF9400000U | ((uint32_t)(slot / 8) << 10) | (reg << 5) | reg;
-        code[2] = 0xB5000040U | reg; // cbnz Xd, +8 (preserves NZCV)
-        code[3] = 0x0000DA00U | reg; // uninitialized slot: existing TSD trap
-        code[4] = returnBranch;
-        used += 20;
+        if (!memory || used + 4 * DYLD_TSD_VENEER_WORDS > capacity
+            || !dyld_tsd_branch(original, (uintptr_t)code, &entryBranch)
+            || !dyld_tsd_build_veneer(code, (uintptr_t)code, original + 4, reg, slot))
+            return DYLD_A64_UDF_TSD_TRAP | reg;
+        used += 4 * DYLD_TSD_VENEER_WORDS;
         return entryBranch;
     }
-    size_t count() const { return used / 20; }
     bool finish() {
         if (memory) {
             sys_icache_invalidate(memory, used);
@@ -984,13 +989,11 @@ static bool translateDarlingCacheTSD(const CacheInfo& info, const char** errorMe
         uint32_t* end = instruction + size / sizeof(uint32_t);
         bool changed = false;
         for (; instruction != end; ++instruction) {
-            if ((*instruction & 0xFFFFFFE0U) != 0xD53BD060U)
+            uint32_t reg;
+            if (!dyld_tsd_is_tpidrro_read(*instruction, &reg))
                 continue;
-            const uint32_t reg = *instruction & 0x1FU;
-            const uint32_t cpuIndexShift = 0xD34CFC00U | (reg << 5) | reg;
-            // Darwin's allocator CPU-index read is not a TSD pointer read.
-            if ((instruction + 1 != end) && instruction[1] == cpuIndexShift)
-                *instruction = 0xAA1F03E0U | reg; // mov Xd, XZR
+            if ((instruction + 1 != end) && dyld_tsd_is_cpu_index_shift(instruction[1], reg))
+                *instruction = DYLD_A64_MOV_X_XZR | reg; // QUIRK, see dyld_tsd_is_cpu_index_shift()
             else
                 *instruction = veneers.translate(reg, (uintptr_t)instruction);
             changed = true;
