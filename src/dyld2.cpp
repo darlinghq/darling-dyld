@@ -6731,6 +6731,9 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 
 	//Check and see if there are any kernel flags
 	dyld3::BootArgs::setFlags(hexToUInt64(_simple_getenv(apple, "dyld_flags"), nullptr));
+#if defined(DARLING) && defined(__arm64__)
+	dyld3::gDarlingRseqCpuOffset = _simple_getenv(apple, "darling_rseq_cpu_offset");
+#endif
 
 #if __has_feature(ptrauth_calls)
 	// Check and see if kernel disabled JOP pointer signing (which lets us load plain arm64 binaries)
