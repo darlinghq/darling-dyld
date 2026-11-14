@@ -2810,6 +2810,19 @@ ImageLoader* getIndexedImage(unsigned int index)
 	return NULL;
 }
 
+// The loaded image whose path or install name is exactly `path`, or NULL.
+ImageLoader* findLoadedImageByInstallPath(const char* path)
+{
+	for (ImageLoader* image : sAllImages) {
+		if ( strcmp(path, image->getPath()) == 0 )
+			return image;
+		const char* installPath = image->getInstallPath();
+		if ( (installPath != NULL) && (strcmp(path, installPath) == 0) )
+			return image;
+	}
+	return NULL;
+}
+
 ImageLoader* findImageByMachHeader(const struct mach_header* target)
 {
 	return findMappedRange((uintptr_t)target);
