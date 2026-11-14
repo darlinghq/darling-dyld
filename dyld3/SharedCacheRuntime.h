@@ -52,6 +52,13 @@ struct SharedCacheLoadInfo {
 
 bool loadDyldCache(const SharedCacheOptions& options, SharedCacheLoadInfo* results);
 
+#if defined(DARLING) && defined(__arm64__)
+// Value of the loader's darling_rseq_cpu_offset= apple entry, or null: where
+// the native rseq area keeps the CPU number, relative to the thread pointer.
+// Set by dyld's _main before the cache is loaded.
+extern const char* gDarlingRseqCpuOffset;
+#endif
+
 
 struct SharedCacheFindDylibResults {
     const mach_header*          mhInCache;
