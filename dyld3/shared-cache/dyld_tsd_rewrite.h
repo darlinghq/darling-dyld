@@ -48,7 +48,6 @@
 #define DYLD_A64_CBNZ_X_PLUS8      0xB5000040u   // cbnz Xt, .+8
 #define DYLD_A64_B                 0x14000000u
 #define DYLD_A64_NOP               0xD503201Fu
-#define DYLD_A64_MOV_X_XZR         0xAA1F03E0u   // mov Xd, xzr (ORR Xd, XZR, XZR)
 #define DYLD_A64_UDF_TSD_TRAP      0x0000DA00u   // + destination register
 
 #define DYLD_TSD_VENEER_WORDS      5
@@ -67,19 +66,6 @@ static inline bool dyld_tsd_is_tpidrro_read(uint32_t insn, uint32_t* reg)
         return false;
     *reg = insn & 0x1F;
     return true;
-}
-
-// QUIRK: `lsr Xd, Xd, #12` (UBFM Xd, Xd, #12, #63) right after a TPIDRRO_EL0
-// read is taken to be a CPU index computation rather than a TSD base use, and
-// the read is replaced by zero. Behaviour reported by the author of the
-// private-cache translation; not documented by Arm or Apple. Evidence tier: a
-// single third-party report, not reproduced here (no arm64 hardware or Apple
-// cache is available to this project's contributors for observation).
-// Needs maintainer approval before it is merged.
-// Test: tests/tsd-rewrite.c, "quirk: cpu index shift".
-static inline bool dyld_tsd_is_cpu_index_shift(uint32_t insn, uint32_t reg)
-{
-    return insn == (0xD34CFC00u | (reg << 5) | reg);
 }
 
 // Branch from `from` to `to` (B, +-128 MiB); false if out of range or

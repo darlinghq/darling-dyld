@@ -64,11 +64,6 @@ static void test_encodings(void)
     uint32_t reg;
     CHECK(!dyld_tsd_is_tpidrro_read(0xD53BD07Fu | 0x0100, &reg));          /* another register field */
     CHECK(!dyld_tsd_is_tpidrro_read(DYLD_A64_NOP, &reg));
-    /* lsr Xd, Xd, #12 is UBFM Xd, Xd, #12, #63 (sf=1 opc=10 100110 N=1 immr=12 imms=63) */
-    CHECK(dyld_tsd_is_cpu_index_shift(0xD34CFC00u | (8 << 5) | 8, 8));    /* quirk: cpu index shift */
-    CHECK(!dyld_tsd_is_cpu_index_shift(0xD34CFC00u | (8 << 5) | 8, 9));
-    CHECK(!dyld_tsd_is_cpu_index_shift(0xD343FC00u | (8 << 5) | 8, 8));   /* lsr #3 */
-    CHECK(DYLD_A64_MOV_X_XZR == 0xAA1F03E0u);
     CHECK(dyld_tsd_slot_offset_valid(16) && dyld_tsd_slot_offset_valid(32760) && dyld_tsd_slot_offset_valid(64));
     CHECK(!dyld_tsd_slot_offset_valid(0) && !dyld_tsd_slot_offset_valid(8) && !dyld_tsd_slot_offset_valid(32768)
           && !dyld_tsd_slot_offset_valid(66) && !dyld_tsd_slot_offset_valid(~0UL));

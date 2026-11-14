@@ -992,10 +992,7 @@ static bool translateDarlingCacheTSD(const CacheInfo& info, const char** errorMe
             uint32_t reg;
             if (!dyld_tsd_is_tpidrro_read(*instruction, &reg))
                 continue;
-            if ((instruction + 1 != end) && dyld_tsd_is_cpu_index_shift(instruction[1], reg))
-                *instruction = DYLD_A64_MOV_X_XZR | reg; // QUIRK, see dyld_tsd_is_cpu_index_shift()
-            else
-                *instruction = veneers.translate(reg, (uintptr_t)instruction);
+            *instruction = veneers.translate(reg, (uintptr_t)instruction);
             changed = true;
         }
         if (changed)
