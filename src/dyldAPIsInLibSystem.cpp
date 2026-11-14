@@ -1918,6 +1918,34 @@ bool _dyld_shared_cache_optimized()
     return false;
 }
 
+bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex)
+{
+	if ( gUseDyld3 )
+		return dyld3::_dyld_is_preoptimized_objc_image_loaded(imageIndex);
+
+	DYLD_NO_LOCK_THIS_BLOCK;
+	typedef bool (*funcType)(uint16_t);
+	static funcType __ptrauth_dyld_function_ptr p = NULL;
+
+	if(p == NULL)
+		dyld_func_lookup_and_resign("__dyld_is_preoptimized_objc_image_loaded", &p);
+	return p(imageIndex);
+}
+
+uint32_t _dyld_objc_class_count()
+{
+	if ( gUseDyld3 )
+		return dyld3::_dyld_objc_class_count();
+
+	DYLD_NO_LOCK_THIS_BLOCK;
+	typedef uint32_t (*funcType)(void);
+	static funcType __ptrauth_dyld_function_ptr p = NULL;
+
+	if(p == NULL)
+		dyld_func_lookup_and_resign("__dyld_objc_class_count", &p);
+	return p();
+}
+
 bool _dyld_shared_cache_is_locally_built()
 {
     if ( gUseDyld3 )
