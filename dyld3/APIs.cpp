@@ -1253,7 +1253,7 @@ bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex)
     return found;
 }
 
-size_t _dyld_objc_class_count()
+uint32_t _dyld_objc_class_count()
 {
     log_apis("_dyld_objc_class_count()\n");
 

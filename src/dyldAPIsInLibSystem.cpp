@@ -1932,13 +1932,13 @@ bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex)
 	return p(imageIndex);
 }
 
-size_t _dyld_objc_class_count()
+uint32_t _dyld_objc_class_count()
 {
 	if ( gUseDyld3 )
 		return dyld3::_dyld_objc_class_count();
 
 	DYLD_NO_LOCK_THIS_BLOCK;
-	typedef size_t (*funcType)(void);
+	typedef uint32_t (*funcType)(void);
 	static funcType __ptrauth_dyld_function_ptr p = NULL;
 
 	if(p == NULL)

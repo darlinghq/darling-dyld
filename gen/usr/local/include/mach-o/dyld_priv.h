@@ -784,6 +784,22 @@ extern bool _dyld_shared_cache_optimized(void);
 // Exists in iOS 13.0 and later
 extern bool _dyld_shared_cache_is_locally_built(void);
 
+
+//
+// Used by libobjc: the number of classes in the shared cache's Objective-C
+// class table, or 0 without a shared cache or such a table.
+//
+// Exists in Mac OS X 12.0 and later
+extern uint32_t _dyld_objc_class_count(void);
+
+//
+// Used by libobjc: whether the shared-cache image identified by imageID, one
+// with preoptimized categories, is loaded. imageID's meaning is private to
+// dyld and libobjc.
+//
+// Exists in Mac OS X 14.0 and later
+extern bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageID);
+
 //
 // Returns if the given app needs a closure built.
 //

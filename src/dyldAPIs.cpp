@@ -2278,7 +2278,7 @@ bool _dyld_is_preoptimized_objc_image_loaded(uint16_t imageIndex)
 	return dyld::findLoadedImageByInstallPath(cache->getIndexedImagePath(imageIndex)) != nullptr;
 }
 
-size_t _dyld_objc_class_count()
+uint32_t _dyld_objc_class_count()
 {
 	const DyldSharedCache* cache = (DyldSharedCache*)dyld::imMemorySharedCacheHeader();
 	if ( cache == nullptr )
