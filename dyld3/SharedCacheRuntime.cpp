@@ -906,6 +906,113 @@ public:
 };
 #endif
 
+#if defined(DARLING) && defined(__arm64__)
+// A macOS arm64 cache reads the Darwin thread-specific data base from
+// TPIDRRO_EL0, which a Linux process cannot set. After a private mapping, every
+// such read in the cache's executable mappings is rewritten so that it yields
+// the base from the native TLS slot libsystem_kernel fills (see
+// dyld_tsd_rewrite.h for the veneer and the private trap used as fallback).
+//
+// The rewrite writes into the process's private copy of the cache only. Pages
+// are made writable (never writable and executable together) for the scan, the
+// instruction cache is invalidated for the changed range before execute
+// permission returns, and the veneers sit in a separate anonymous mapping that
+// becomes read-only executable once filled. The cache is not code-signed or
+// sealed by dyld, so nothing here fights those protections; every executable
+// mapping is read once, which costs startup time proportional to the cache.
+#include <libkern/OSCacheControl.h>
+#include "dyld_tsd_rewrite.h"
+
+extern "C" unsigned long sys_thread_get_native_tsd_slot_offset(void);
+
+class DarlingTSDReadVeneers {
+    uint32_t* memory = nullptr;
+    size_t used = 0;
+    unsigned long slot = 0;
+    bool committed = false;
+    static const size_t capacity = 1024 * 1024;
+public:
+    DarlingTSDReadVeneers(uintptr_t cacheStart, unsigned long offset) : slot(offset) {
+        if (!dyld_tsd_slot_offset_valid(offset) || cacheStart <= capacity)
+            return;
+        // Just below the cache, where a branch from its text can reach (+-128 MiB).
+        void* desired = (void*)(cacheStart - capacity);
+        void* mapped = ::mmap(desired, capacity, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (mapped != desired) {
+            if (mapped != MAP_FAILED) ::munmap(mapped, capacity);
+            return;
+        }
+        memory = (uint32_t*)mapped;
+    }
+    ~DarlingTSDReadVeneers() {
+        if (memory && !committed) ::munmap(memory, capacity);
+    }
+    // The instruction that replaces `mrs Xd, TPIDRRO_EL0` at `original`: a
+    // branch to a veneer when one can be placed and reached, else the trap.
+    uint32_t translate(uint32_t reg, uintptr_t original) {
+        if (reg == 31) return DYLD_A64_NOP; // MRS XZR has no observable result
+        uint32_t entryBranch;
+        uint32_t* code = (uint32_t*)((uintptr_t)memory + used);
+        if (!memory || used + 4 * DYLD_TSD_VENEER_WORDS > capacity
+            || !dyld_tsd_branch(original, (uintptr_t)code, &entryBranch)
+            || !dyld_tsd_build_veneer(code, (uintptr_t)code, original + 4, reg, slot))
+            return DYLD_A64_UDF_TSD_TRAP | reg;
+        used += 4 * DYLD_TSD_VENEER_WORDS;
+        return entryBranch;
+    }
+    bool finish() {
+        if (memory) {
+            sys_icache_invalidate(memory, used);
+            if (::mprotect(memory, capacity, PROT_READ | PROT_EXEC) != 0)
+                return false;
+        }
+        committed = true;
+        return true;
+    }
+};
+
+static bool translateDarlingCacheTSD(const CacheInfo& info, const char** errorMessage)
+{
+    DarlingTSDReadVeneers veneers(info.mappings[0].sms_address,
+                                 sys_thread_get_native_tsd_slot_offset());
+    for (uint32_t i = 0; i < info.mappingsCount; ++i) {
+        const auto& mapping = info.mappings[i];
+        if (!(mapping.sms_init_prot & VM_PROT_EXECUTE))
+            continue;
+        void* start = (void*)(uintptr_t)mapping.sms_address;
+        size_t size = (size_t)mapping.sms_size;
+        if (::mprotect(start, size, PROT_READ | PROT_WRITE) != 0) {
+            *errorMessage = "could not make private cache text writable for TSD translation";
+            return false;
+        }
+        uint32_t* instruction = (uint32_t*)start;
+        uint32_t* end = instruction + size / sizeof(uint32_t);
+        bool changed = false;
+        for (; instruction != end; ++instruction) {
+            uint32_t reg;
+            if (!dyld_tsd_is_tpidrro_read(*instruction, &reg))
+                continue;
+            *instruction = veneers.translate(reg, (uintptr_t)instruction);
+            changed = true;
+        }
+        if (changed)
+            sys_icache_invalidate(start, size);
+        int protection = PROT_EXEC;
+        if (mapping.sms_init_prot & VM_PROT_READ) protection |= PROT_READ;
+        if (mapping.sms_init_prot & VM_PROT_WRITE) protection |= PROT_WRITE;
+        if (::mprotect(start, size, protection) != 0) {
+            *errorMessage = "could not restore private cache text protections";
+            return false;
+        }
+    }
+    if (!veneers.finish()) {
+        *errorMessage = "could not protect private cache TSD veneers";
+        return false;
+    }
+    return true;
+}
+#endif
+
 static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadInfo* results)
 {
     // open and validate cache file
@@ -991,6 +1098,12 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
     ::close(info.fd);
 
 #if TARGET_OS_SIMULATOR // simulator caches do not support sliding
+#if defined(DARLING) && defined(__arm64__)
+    if (!translateDarlingCacheTSD(info, &results->errorMessage)) {
+        results->loadAddress = nullptr;
+        return false;
+    }
+#endif
 #if defined(DARLING)
     reservation.keep();
 #endif
@@ -1013,6 +1126,10 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
         dyld::log("mapped dyld cache file private to process (%s):\n", results->path);
         verboseSharedCacheMappings(info.mappings, info.mappingsCount);
     }
+#if defined(DARLING) && defined(__arm64__)
+    if (success)
+        success = translateDarlingCacheTSD(info, &results->errorMessage);
+#endif
 #if defined(DARLING)
     if ( success )
         reservation.keep();
