@@ -64,7 +64,8 @@ struct dyld_cache_header
                 simulator              : 1,  // for simulator of specified platform
                 locallyBuiltCache      : 1,  // 0 for B&I built cache, 1 for locally built cache
                 builtFromChainedFixups : 1,  // some dylib in cache was built using chained fixups, so patch tables must be used for overrides
-                padding                : 20; // TBD
+                newFormatTLVs          : 1,  // cache builder emitted TLV_Thunkv2
+                padding                : 19; // TBD
     uint64_t    sharedRegionStart;      // base load address of cache if not slid
     uint64_t    sharedRegionSize;       // overall size of region cache can be mapped into
     uint64_t    maxSlide;               // runtime slide of cache can be between zero and this value
@@ -524,5 +525,4 @@ static const uint64_t kDyldSharedCacheTypeProduction = 1;
 
 
 #endif // __DYLD_CACHE_FORMAT__
-
 

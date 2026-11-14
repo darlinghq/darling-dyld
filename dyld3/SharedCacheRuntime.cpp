@@ -45,6 +45,7 @@
 #include <TargetConditionals.h>
 
 #include "dyld_cache_format.h"
+#include "dyld_cache_ranges.h"
 #include "SharedCacheRuntime.h"
 #include "Loading.h"
 #include "BootArgs.h"
@@ -387,11 +388,9 @@ static void verboseSharedCacheMappingsToConsole(const shared_file_mapping_slide_
 }
 #endif
 
-static bool cacheRangeContains(uint64_t start, uint64_t length,
-                               uint64_t address, uint64_t size)
+static inline bool cacheRangeContains(uint64_t start, uint64_t length, uint64_t address, uint64_t size)
 {
-    return length <= UINT64_MAX - start && address >= start
-        && address - start <= length && size <= length - (address - start);
+    return dyld_cache_range_contains(start, length, address, size);
 }
 
 static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoadInfo* results, CacheInfo* info)
@@ -479,6 +478,19 @@ static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoa
         return false;
     }
 
+    // Use the same format discriminator as the slide-table consumer below.
+    // A modern header with zero entries must not bypass this validation.
+    if ( cache->header.mappingOffset > __offsetof(dyld_cache_header, mappingWithSlideOffset) ) {
+        if ( (cache->header.mappingWithSlideCount != cache->header.mappingCount)
+          || (cache->header.mappingWithSlideOffset % alignof(dyld_cache_mapping_and_slide_info) != 0)
+          || !cacheRangeContains(0, sizeof(firstPage), cache->header.mappingWithSlideOffset,
+                                  uint64_t(cache->header.mappingWithSlideCount) * sizeof(dyld_cache_mapping_and_slide_info)) ) {
+            results->errorMessage = "shared cache slide mappings are invalid";
+            ::close(fd);
+            return false;
+        }
+    }
+
     // register code signature of cache file
     fsignatures_t siginfo;
     siginfo.fs_file_start = 0;  // cache always starts at beginning of file
@@ -556,8 +568,21 @@ static bool preflightCacheFile(const SharedCacheOptions& options, SharedCacheLoa
         info->mappings[i].sms_max_prot              = fileMappings[i].maxProt;
         info->mappings[i].sms_init_prot             = initProt;
         if ( slideInfoFileSize != 0 ) {
-            uint64_t offsetInLinkEditRegion = (slideInfoFileOffset - linkeditMapping->fileOffset);
-            info->mappings[i].sms_slide_start   = (user_addr_t)(linkeditMapping->address + offsetInLinkEditRegion);
+            const dyld_cache_mapping_info* slideMapping = nullptr;
+            for (uint32_t j = 0; j != cache->header.mappingCount; ++j) {
+                if ( cacheRangeContains(fileMappings[j].fileOffset, fileMappings[j].size,
+                                        slideInfoFileOffset, slideInfoFileSize) ) {
+                    slideMapping = &fileMappings[j];
+                    break;
+                }
+            }
+            if ( slideMapping == nullptr ) {
+                results->errorMessage = "shared cache slide info lies outside mappings";
+                ::close(fd);
+                return false;
+            }
+            uint64_t offsetInSlideRegion = slideInfoFileOffset - slideMapping->fileOffset;
+            info->mappings[i].sms_slide_start   = (user_addr_t)(slideMapping->address + offsetInSlideRegion);
             info->mappings[i].sms_slide_size    = (user_addr_t)slideInfoFileSize;
             info->mappings[i].sms_init_prot    |= (VM_PROT_SLIDE | authProt);
             info->mappings[i].sms_max_prot     |= (VM_PROT_SLIDE | authProt);
@@ -849,6 +874,38 @@ static bool mapCacheSystemWide(const SharedCacheOptions& options, SharedCacheLoa
 }
 #endif // TARGET_OS_SIMULATOR
 
+#if defined(DARLING)
+// Reserve with a hint, never MAP_FIXED: a collision must not replace live code.
+// Once acquired, the file mappings may safely replace our own reservation.
+class DarlingCacheReservation {
+    void* address = MAP_FAILED;
+    size_t size = 0;
+public:
+    bool acquire(uint64_t start, uint64_t length) {
+        if ( start == 0 || length == 0 || start > UINTPTR_MAX
+          || length > SIZE_MAX || length > UINTPTR_MAX - start )
+            return false;
+        void* requested = (void*)(uintptr_t)start;
+        void* mapped = ::mmap(requested, (size_t)length, PROT_NONE,
+                              MAP_PRIVATE | MAP_ANON, -1, 0);
+        if ( mapped == MAP_FAILED )
+            return false;
+        if ( mapped != requested ) {
+            ::munmap(mapped, (size_t)length);
+            return false;
+        }
+        address = mapped;
+        size = (size_t)length;
+        return true;
+    }
+    void keep() { address = MAP_FAILED; }
+    ~DarlingCacheReservation() {
+        if ( address != MAP_FAILED )
+            ::munmap(address, size);
+    }
+};
+#endif
+
 static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadInfo* results)
 {
     // open and validate cache file
@@ -871,10 +928,34 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
 
     results->loadAddress = (const DyldSharedCache*)(info.mappings[0].sms_address);
 
+#if defined(DARLING)
+    // Linux-backed Darling has no replaceable system-wide shared region.
+    // Validate the complete destination span before any destructive mappings.
+    const uint64_t slide = (uint32_t)results->slide;
+    const uint64_t start = info.sharedRegionStart;
+    const uint64_t length = info.sharedRegionSize;
+    bool valid = start <= UINT64_MAX - slide;
+    const uint64_t destination = valid ? start + slide : 0;
+    valid = valid && length != 0 && length <= UINT64_MAX - destination;
+    for (uint32_t i = 0; valid && i < info.mappingsCount; ++i) {
+        const uint64_t address = info.mappings[i].sms_address;
+        const uint64_t size = info.mappings[i].sms_size;
+        valid = address >= destination && address - destination <= length
+             && size <= length - (address - destination);
+    }
+    DarlingCacheReservation reservation;
+    if ( !valid || !reservation.acquire(destination, length) ) {
+        results->loadAddress = nullptr;
+        results->errorMessage = "could not reserve unoccupied private shared cache region";
+        ::close(info.fd);
+        return false;
+    }
+#else
     // deallocate any existing system wide shared cache
     deallocateExistingSharedCache();
+#endif
 
-#if TARGET_OS_SIMULATOR && TARGET_OS_WATCH
+#if TARGET_OS_SIMULATOR && TARGET_OS_WATCH && !defined(DARLING)
     // <rdar://problem/50887685> watchOS 32-bit cache does not overlap macOS dyld cache address range
     // mmap() of a file needs a vm_allocation behind it, so make one
     vm_address_t loadAddress = 0x40000000;
@@ -897,7 +978,9 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
         if ( ::mmap(mmapAddress, size, protection, MAP_FIXED | MAP_PRIVATE, info.fd, offset) != mmapAddress ) {
             // failed to map some chunk of this shared cache file
             // clear shared region
+#if !defined(DARLING)
             ::mmap((void*)((long)SHARED_REGION_BASE), SHARED_REGION_SIZE, PROT_NONE, MAP_FIXED | MAP_PRIVATE| MAP_ANON, 0, 0);
+#endif
             // return failure
             results->loadAddress        = nullptr;
             results->errorMessage       = "could not mmap() part of dyld cache";
@@ -908,6 +991,9 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
     ::close(info.fd);
 
 #if TARGET_OS_SIMULATOR // simulator caches do not support sliding
+#if defined(DARLING)
+    reservation.keep();
+#endif
     return true;
 #else
 
@@ -927,6 +1013,12 @@ static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadIn
         dyld::log("mapped dyld cache file private to process (%s):\n", results->path);
         verboseSharedCacheMappings(info.mappings, info.mappingsCount);
     }
+#if defined(DARLING)
+    if ( success )
+        reservation.keep();
+    else
+        results->loadAddress = nullptr;
+#endif
     return success;
 #endif
 }
@@ -967,7 +1059,8 @@ bool findInSharedCacheImage(const SharedCacheLoadInfo& loadInfo, const char* dyl
     if ( loadInfo.loadAddress == nullptr )
         return false;
 
-    if ( loadInfo.loadAddress->header.formatVersion != dyld3::closure::kFormatVersion ) {
+    if ( (loadInfo.loadAddress->header.formatVersion != dyld3::closure::kFormatVersion)
+      || (loadInfo.loadAddress->header.dylibsImageArrayAddr == 0) ) {
         // support for older cache with a different Image* format
 #if TARGET_OS_IPHONE
         uint64_t hash = 0;
@@ -976,6 +1069,21 @@ bool findInSharedCacheImage(const SharedCacheLoadInfo& loadInfo, const char* dyl
 #endif
         const dyld_cache_image_info* const start = (dyld_cache_image_info*)((uint8_t*)loadInfo.loadAddress + loadInfo.loadAddress->header.imagesOffset);
         const dyld_cache_image_info* const end = &start[loadInfo.loadAddress->header.imagesCount];
+        // The path trie can outlive the dyld3 ImageArray format. Use recorded
+        // aliases (including framework Current paths), not guessed versions.
+        uint32_t aliasIndex = 0;
+        if ( loadInfo.loadAddress->header.mappingOffset >= 0x118
+          && loadInfo.loadAddress->header.dylibsTrieAddr != 0
+          && loadInfo.loadAddress->header.dylibsTrieSize != 0
+          && loadInfo.loadAddress->hasImagePath(dylibPathToFind, aliasIndex)
+          && aliasIndex < loadInfo.loadAddress->header.imagesCount ) {
+            const dyld_cache_image_info* p = &start[aliasIndex];
+            results->mhInCache = (const mach_header*)(p->address + loadInfo.slide);
+            results->pathInCache = (const char*)loadInfo.loadAddress + p->pathFileOffset;
+            results->slideInCache = loadInfo.slide;
+            results->image = nullptr;
+            return true;
+        }
         for (const dyld_cache_image_info* p = start; p != end; ++p) {
 #if TARGET_OS_IPHONE
             // on iOS, inode is used to hold hash of path

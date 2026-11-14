@@ -60,6 +60,20 @@
 #include "Tracing.h"
 
 
+// Only cache images whose header advertises TLV_Thunkv2 use its packed layout.
+// Disk images and older caches retain the legacy descriptor representation.
+extern "C" __attribute__((visibility("hidden"))) bool tlv_image_uses_cache_v2(const struct mach_header* mh)
+{
+	size_t cacheSize = 0;
+	const struct dyld_cache_header* cache = (const struct dyld_cache_header*)_dyld_get_shared_cache_range(&cacheSize);
+	const size_t prefixSize = offsetof(struct dyld_cache_header, sharedRegionStart);
+	if ( cache == NULL || cacheSize < prefixSize || cache->mappingOffset < prefixSize )
+		return false;
+	uintptr_t image = (uintptr_t)mh;
+	uintptr_t base = (uintptr_t)cache;
+	return image >= base && image - base < cacheSize && cache->newFormatTLVs;
+}
+
 // this was in dyld_priv.h but it is no longer exported
 extern "C" {
     const struct dyld_all_image_infos* _dyld_get_all_image_infos() __attribute__((visibility("hidden")));
