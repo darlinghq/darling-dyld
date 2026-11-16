@@ -190,7 +190,14 @@ _hasXSave:			.long 0
 	.private_extern _tlv_get_addr
 _tlv_get_addr:
 	movl	4(%eax),%ecx			// get key from descriptor
+#if defined(DARLING)
+	// DARLING: on 32-bit x86 the Darwin thread-specific data lives behind %fs
+	// (the host keeps %gs for itself); %gs:key*4 never sees the values that
+	// pthread_setspecific stores, so every access would allocate a new block.
+	movl	%fs:0x0(,%ecx,4),%ecx	// get thread value
+#else
 	movl	%gs:0x0(,%ecx,4),%ecx	// get thread value
+#endif
 	testl	%ecx,%ecx				// if NULL, lazily allocate
 	je		LlazyAllocate
 	movl	8(%eax),%eax			// add offset from descriptor
