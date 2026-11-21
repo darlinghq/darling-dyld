@@ -142,12 +142,15 @@ target_link_libraries(system_loader libc_static system_blocks_static
 	corecrypto_static
 )
 
+# One fat archive with every slice
+target_link_libraries(system_loader compiler_rt_static platform_static)
+
 if (BUILD_TARGET_32BIT)
-	target_link_libraries(system_loader libc_static32 compiler_rt_static32 platform_static32 system_kernel_static32)
+	target_link_libraries(system_loader libc_static32 system_kernel_static32)
 endif (BUILD_TARGET_32BIT)
 
 if (BUILD_TARGET_64BIT)
-	target_link_libraries(system_loader libc_static64 compiler_rt_static64 platform_static64 system_kernel_static64)
+	target_link_libraries(system_loader libc_static64 system_kernel_static64)
 endif (BUILD_TARGET_64BIT)
 
 make_fat(system_loader)
