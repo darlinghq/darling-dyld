@@ -236,6 +236,7 @@ static const struct dyld_func dyld_funcs[] = {
 	{"__dyld_shared_cache_file_path",					(void*)dyld::getStandardSharedCacheFilePath },
 	{"__dyld_has_inserted_or_interposing_libraries",	(void*)dyld::hasInsertedOrInterposingLibraries },
     {"__dyld_get_image_header_containing_address",		(void*)dyld_image_header_containing_address },
+    {"__dyld_get_dlopen_image_header",					(void*)_dyld_get_dlopen_image_header },
     {"__dyld_is_memory_immutable",						(void*)_dyld_is_memory_immutable },
     {"__dyld_objc_notify_register",						(void*)_dyld_objc_notify_register },
     {"__dyld_get_shared_cache_uuid",					(void*)_dyld_get_shared_cache_uuid },
@@ -1747,6 +1748,22 @@ void* dlopen_internal(const char* path, int mode, void* callerAddress)
 	if ( dyld::gLogAPIs && (result != NULL) )
 		dyld::log("  %s(%s) ==> %p\n", __func__, path, result);
 	return result;
+}
+
+// The mach header of the image that a dlopen() handle refers to, or NULL when
+// the handle is one of the special RTLD_* handles or refers to no loaded image.
+const struct mach_header* _dyld_get_dlopen_image_header(void* handle)
+{
+	if ( dyld::gLogAPIs )
+		dyld::log("%s(%p)\n", __func__, handle);
+
+	if ( (handle == RTLD_DEFAULT) || (handle == RTLD_MAIN_ONLY) || (handle == RTLD_NEXT) || (handle == RTLD_SELF) )
+		return NULL;
+
+	ImageLoader* image = (ImageLoader*)(((uintptr_t)handle) & (-4));	// clear mode bits
+	if ( dyld::validImage(image) )
+		return image->machHeader();
+	return NULL;
 }
 
 int dlclose(void* handle)

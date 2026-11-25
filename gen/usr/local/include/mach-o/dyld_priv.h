@@ -114,6 +114,13 @@ extern const char* dyld_image_path_containing_address(const void* addr);
 extern const struct mach_header* dyld_image_header_containing_address(const void* addr);
 
 //
+// Returns the mach header of the image that a handle returned by dlopen()
+// refers to. Returns NULL for the special RTLD_* handles and for handles that
+// do not refer to a loaded image.
+//
+extern const struct mach_header* _dyld_get_dlopen_image_header(void* handle);
+
+//
 // Return the mach header of the process
 //
 // Exists in Mac OS X 10.16 and later

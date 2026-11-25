@@ -126,6 +126,8 @@ void _dyld_objc_notify_register(_dyld_objc_notify_mapped    mapped,
 
 const mach_header* dyld_image_header_containing_address(const void* addr) TEMP_HIDDEN;
 
+const mach_header* _dyld_get_dlopen_image_header(void* handle) TEMP_HIDDEN;
+
 const mach_header* _dyld_get_image_header_containing_address(const void* address) TEMP_HIDDEN;
 
 bool _dyld_image_containing_address(const void* address) TEMP_HIDDEN;

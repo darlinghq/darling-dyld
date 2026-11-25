@@ -901,6 +901,26 @@ void parseDlHandle(void* h, const MachOLoaded** mh, bool* dontContinue)
     *mh           = (const MachOLoaded*)((((uintptr_t)h) & (-2)) << 5);
 }
 
+// The mach header of the image that a dlopen() handle refers to, or NULL when
+// the handle is one of the special RTLD_* handles or refers to no loaded image.
+const mach_header* _dyld_get_dlopen_image_header(void* handle)
+{
+    log_apis("_dyld_get_dlopen_image_header(%p)\n", handle);
+
+    if ( (handle == RTLD_DEFAULT) || (handle == RTLD_MAIN_ONLY) || (handle == RTLD_NEXT) || (handle == RTLD_SELF) )
+        return nullptr;
+
+    const MachOLoaded*  mh;
+    bool                dontContinue;
+    parseDlHandle(handle, &mh, &dontContinue);
+
+    __block bool validHandle = false;
+    gAllImages.infoForImageMappedAt(mh, ^(const LoadedImage& foundImage, uint8_t permissions) {
+        validHandle = true;
+    });
+    return validHandle ? mh : nullptr;
+}
+
 int dlclose(void* handle)
 {
     DYLD_LOAD_LOCK_THIS_BLOCK
