@@ -1862,6 +1862,21 @@ const struct mach_header* dyld_image_header_containing_address(const void* addr)
 }
 
 
+const struct mach_header* _dyld_get_dlopen_image_header(void* handle)
+{
+	if ( gUseDyld3 )
+		return dyld3::_dyld_get_dlopen_image_header(handle);
+
+	DYLD_NO_LOCK_THIS_BLOCK;
+    typedef const mach_header* (*funcType)(void*);
+    static funcType __ptrauth_dyld_function_ptr p = NULL;
+
+	if(p == NULL)
+	    dyld_func_lookup_and_resign("__dyld_get_dlopen_image_header", &p);
+	return p(handle);
+}
+
+
 bool dyld_shared_cache_some_image_overridden()
 {
 	if ( gUseDyld3 )
