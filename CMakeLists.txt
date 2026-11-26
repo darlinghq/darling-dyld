@@ -10,6 +10,8 @@ include (darling_exe)
 
 add_definitions(-nostdinc)
 add_definitions(-D_LIBCPP_NO_EXCEPTIONS=1)
+# dyld has no aligned_alloc(): the libc++ headers must not refer to the aligned operators new and delete
+add_definitions(-D_LIBCPP_HAS_NO_LIBRARY_ALIGNED_ALLOCATION=1)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wno-availability -include ${CMAKE_SOURCE_DIR}/src/duct/include/CrashReporterClient.h")
 set(CMAKE_SHARED_LINKER_FLAGS_SAVED "${CMAKE_SHARED_LINKER_FLAGS}")
