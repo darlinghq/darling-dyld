@@ -282,7 +282,9 @@ int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags)
 		AMFI_DYLD_OUTPUT_ALLOW_CUSTOM_SHARED_CACHE |
 		AMFI_DYLD_OUTPUT_ALLOW_FALLBACK_PATHS |
 		AMFI_DYLD_OUTPUT_ALLOW_PRINT_VARS |
-		AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION;
+		AMFI_DYLD_OUTPUT_ALLOW_FAILED_LIBRARY_INSERTION |
+		// Newer dyld_sim drops __interpose tuples without this bit.
+		AMFI_DYLD_OUTPUT_ALLOW_LIBRARY_INTERPOSING;
 
 	(void)input_flags;
 	*output_flags = allowEverything;
